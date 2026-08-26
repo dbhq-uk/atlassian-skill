@@ -56,10 +56,10 @@ Issue type names are per-project. `Task` in one project may be `Story` or `Work 
 
 ```json
 [
-  {"summary": "Register Microsoft.App on the subscription", "type": "Task",
-   "description": "Blocks the Function App.\n\nOnly the pipeline identity can do this.",
+  {"summary": "Enable the storage provider on the subscription", "type": "Task",
+   "description": "Blocks the deployment.\n\nOnly the pipeline identity can do this.",
    "labels": ["infra"], "priority": "High"},
-  {"summary": "Map EXP_PY_STATUS to CHECK/BANK"}
+  {"summary": "Add retry handling to the upload step"}
 ]
 ```
 

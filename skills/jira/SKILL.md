@@ -53,10 +53,10 @@ ${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh bulk <PROJECT> tickets.json [--dry-ru
 
 ```json
 [
-  {"summary": "Register Microsoft.App on the subscription", "type": "Task",
-   "description": "Blocks the Function App.\n\nOnly the pipeline identity can do this.",
+  {"summary": "Enable the storage provider on the subscription", "type": "Task",
+   "description": "Blocks the deployment.\n\nOnly the pipeline identity can do this.",
    "labels": ["infra"], "priority": "High"},
-  {"summary": "Map EXP_PY_STATUS to CHECK/BANK", "type": "Task"}
+  {"summary": "Add retry handling to the upload step", "type": "Task"}
 ]
 ```
 
@@ -81,7 +81,7 @@ ${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh mine [max]
 1. **Never invent a project key, an issue type, or a field name.** Read it with `jira-meta.sh` first.
 2. **Confirm the summary and description with the user before creating.** A Jira issue is visible to the whole team the moment it exists, and this skill cannot delete one.
 3. **Two or more issues means `bulk` with `--dry-run` first**, reviewed, then the real run.
-4. Do not put credentials, tokens, IBANs, or payment data into an issue description. This repository is a regulated environment — see the root `CLAUDE.md`.
+4. Do not put credentials, tokens, account numbers, or personal data into an issue description. A Jira issue is not a secret store, and in a regulated environment it is disclosable.
 5. On failure, read the `Cause:` and `Fix:` lines the scripts print. They carry Jira's own error text.
 
 ## Limits
