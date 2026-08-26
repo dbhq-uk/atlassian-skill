@@ -66,6 +66,24 @@ Only `summary` is required; `type` defaults to `Task`. Blank lines in a descript
 
 Every successful create prints the issue key and its browse URL.
 
+## Writing the issue text
+
+Every summary and every description is written in **Simplified Technical English**. The rules, the word choices and the pre-create checklist are in [references/ste.md](references/ste.md). Read that file before you write an issue.
+
+The shape of an issue:
+
+- **Summary** — one line, in the imperative or as a noun phrase. It names the thing and the scope: `Open TCP port 1433 from the DevOps agent pool subnet to the private endpoint subnet`. A change reference in parentheses at the end is permitted.
+- **First paragraph** — what this issue is, in one or two sentences. A reader who stops here knows why the ticket exists.
+- **The request, or what happened** — the specific action, with the values a person needs to do it.
+- **Why** — the reason and the evidence, with the date you measured it.
+- **Scope and limits** — what the issue does not cover.
+- **The trigger to close it** — for anything temporary, what event ends it, named as a ticket or a date rather than as an intention.
+- **References** — the documents and the related issue keys.
+
+Drop a heading that has nothing to say. Do not write a heading and then repeat the summary under it.
+
+Four rules carry most of the value: a sentence has a maximum of 25 words, the active voice names the actor, one term means one thing through the whole issue, and a technical name never changes to obey a rule.
+
 ## Reading
 
 ```bash
@@ -83,6 +101,7 @@ ${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh mine [max]
 3. **Two or more issues means `bulk` with `--dry-run` first**, reviewed, then the real run.
 4. Do not put credentials, tokens, account numbers, or personal data into an issue description. A Jira issue is not a secret store, and in a regulated environment it is disclosable.
 5. On failure, read the `Cause:` and `Fix:` lines the scripts print. They carry Jira's own error text.
+6. **Write the summary and the description in Simplified Technical English** — see [§ Writing the issue text](#writing-the-issue-text) and [references/ste.md](references/ste.md).
 
 ## Limits
 
