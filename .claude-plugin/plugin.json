@@ -1,0 +1,21 @@
+{
+  "name": "jira",
+  "description": "A Jira skill for Claude Code - create issues one at a time or in bulk, look up projects, issue types and required fields before you create, and read issues back with JQL. Via the Jira Cloud REST API v3 and an API token. Create and read only: no delete, no bulk transition.",
+  "version": "1.0.0",
+  "author": {
+    "name": "DBHQ",
+    "email": "dan@dbhq.uk"
+  },
+  "homepage": "https://dbhq.uk",
+  "repository": "https://github.com/dbhq-uk/jira-skill",
+  "license": "MIT",
+  "keywords": [
+    "jira",
+    "atlassian",
+    "issue-tracking",
+    "tickets",
+    "jql",
+    "rest-api",
+    "productivity"
+  ]
+}
