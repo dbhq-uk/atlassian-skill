@@ -158,6 +158,20 @@ case "${1:-}" in
         RESPONSE="$API_BODY"
         api_ok || api_fail "$RESPONSE" "fetching $KEY"
         printf '%s' "$RESPONSE" | jq -r --arg site "$SITE" '
+            # ADF nests text arbitrarily deep (a list item holds a paragraph
+            # holds the text), so collect it recursively. A one-level map
+            # silently renders a bulleted description as empty.
+            def nodetext:
+                [recurse(.content[]?)
+                 | if   .type == "text"       then .text
+                   elif .type == "inlineCard" then (.attrs.url // "")
+                   elif .type == "hardBreak"  then "\n"
+                   else empty end]
+                | join("");
+            def blocktext:
+                if .type == "bulletList" or .type == "orderedList"
+                then [.content[]? | "  - " + nodetext] | join("\n")
+                else nodetext end;
             "\(.key)  \(.fields.summary)",
             "URL:      \($site)/browse/\(.key)",
             "Type:     \(.fields.issuetype.name)",
@@ -168,7 +182,7 @@ case "${1:-}" in
             "Updated:  \(.fields.updated)",
             "",
             "Description:",
-            ((.fields.description.content // []) | map(.content // [] | map(.text // "") | join("")) | join("\n") | if . == "" then "  (empty)" else . end)'
+            ((.fields.description.content // []) | map(blocktext) | map(select(length > 0)) | join("\n") | if . == "" then "  (empty)" else . end)'
         ;;
 
     search)
