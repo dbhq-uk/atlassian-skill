@@ -2,15 +2,15 @@
 
 <img src="assets/logo.svg" alt="atlassian - Jira issues and Confluence pages from your agent, by DBHQ" width="560">
 
-# jira
+# atlassian
 
-**Raise the ticket without leaving the conversation**
+**Raise the ticket and write the page, without leaving the conversation**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Code](https://img.shields.io/badge/Claude_Code-Plugin-blueviolet)](https://code.claude.com/docs/en/plugins)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey)]()
 
-A free, open-source tool by [DBHQ](https://dbhq.uk)
+A free, open-source tool by [DBHQ](https://dbhq.uk) - documented at [skills.dbhq.uk](https://skills.dbhq.uk/atlassian/)
 
 </div>
 
@@ -28,27 +28,27 @@ project administration. Anything destructive stays a human job in the Jira UI.
 
 ## Install
 
-### Any agent (Claude Code, Codex, Cursor, Copilot, Windsurf, Gemini, Cline and more)
+### As a Claude Code plugin (recommended)
+
+```
+/plugin marketplace add dbhq-uk/marketplace
+/plugin install atlassian@dbhq
+```
+
+### Any agent (Cursor, Copilot, Windsurf, Gemini, Cline and more)
 
 ```bash
-npx skills add dbhq-uk/jira-skill
+npx skills add dbhq-uk/atlassian-skill
 ```
 
 The [skills.sh](https://skills.sh) CLI installs into whichever agent directories
-it finds.
-
-### Claude Code plugin
-
-```bash
-/plugin marketplace add dbhq-uk/marketplace
-/plugin install jira@dbhq
-```
+it finds, so this works outside Claude Code and Codex too.
 
 ### Local install (Claude Code or Codex)
 
 ```bash
-git clone https://github.com/dbhq-uk/jira-skill.git
-cd jira-skill
+git clone https://github.com/dbhq-uk/atlassian-skill.git
+cd atlassian-skill
 ./install.sh          # Claude Code: symlinks into ~/.claude/skills (edits are live)
 ./install-codex.sh    # Codex: installs into ~/.codex/skills
 ```
@@ -62,6 +62,7 @@ whole skill directory is symlinked untouched, while Codex does not, so its
 ### Requirements
 
 `jq`, `curl`, and a Jira Cloud account you can create an API token on.
+
 
 ## Setup
 
@@ -141,12 +142,26 @@ rollback: the skill cannot delete.
 
 ## Also from DBHQ
 
-[gitview](https://github.com/dbhq-uk/gitview-skill) - which branches are finished
-and safe to delete, where a squash-merge defeats the obvious checks. The two
-shipped together as `devskills` until 17 September 2026; they were split because
-they share no API, no credential and no subject.
+Fifteen free agent skills, all of them installable from the same marketplace and
+all documented at **[skills.dbhq.uk](https://skills.dbhq.uk)**.
 
-The rest of the skills are at [dbhq.uk/skills](https://dbhq.uk/skills/).
+| Skill | What it does |
+|---|---|
+| [outlook](https://skills.dbhq.uk/outlook/) | Microsoft 365 mail and calendar, from the terminal |
+| [trello](https://skills.dbhq.uk/trello/) | Your boards, run from your agent |
+| [legwork](https://skills.dbhq.uk/legwork/) | Research that settles a decision, and says when it cannot |
+| [dovetail](https://skills.dbhq.uk/dovetail/) | Checks whether your repository still agrees with itself |
+| [verve](https://skills.dbhq.uk/verve/) | Strips AI tells from prose and puts a voice back |
+| [vela](https://skills.dbhq.uk/vela/) | Compiler-exact code search for .NET |
+| [garmin](https://skills.dbhq.uk/garmin/) | Your Garmin data, answered in the terminal |
+| [imager](https://skills.dbhq.uk/imager/) | Images from GPT Image 2, costed before it spends |
+| [gitview](https://skills.dbhq.uk/gitview/) | Which branches are finished, and safe to delete |
+| [pennyblack](https://skills.dbhq.uk/pennyblack/) | A physical letter, posted from the terminal |
+| [buildwork](https://skills.dbhq.uk/buildwork/) | Your open issues, run as parallel agents |
+| [deskwork](https://skills.dbhq.uk/deskwork/) | What an agent noticed, tracked as real work |
+| [groupwork](https://skills.dbhq.uk/groupwork/) | A second agent on the work, adversary or partner |
+
+Plus [heliograph](https://skills.dbhq.uk/heliograph/), for a machine you cannot log into.
 
 ## Licence
 
