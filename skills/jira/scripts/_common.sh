@@ -62,6 +62,9 @@ api() {
     # expansion, so the newline goes through a variable.
     local nl=$'\n'
     API_STATUS="${out##*"$nl"}"
+    # These two are how api() returns. jira-meta.sh and jira-issues.sh source
+    # this file and read them; shellcheck sees only this file, so it cannot.
+    # shellcheck disable=SC2034
     API_BODY="${out%"$nl"*}"
 }
 
