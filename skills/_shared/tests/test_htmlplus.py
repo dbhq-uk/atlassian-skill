@@ -8,6 +8,7 @@ SCRIPTS = pathlib.Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from htmlplus import ConversionError, html_to_adf  # noqa: E402
+from htmlplus import adf_to_html, adf_to_markdown  # noqa: E402
 
 
 class TestDocumentEnvelope(unittest.TestCase):
@@ -633,6 +634,96 @@ class TestNesting(unittest.TestCase):
             "</section></blockquote>",
             "layoutSection", "blockquote",
         )
+
+
+ROUND_TRIP_CASES = [
+    "<p>Hello.</p>",
+    "<h2>Open items</h2>",
+    "<p><strong>bold</strong></p>",
+    "<p><code>reference</code></p>",
+    '<div data-type="panel-warning"><p>It will bite.</p></div>',
+    '<p><span data-type="status" data-color="green">Built</span></p>',
+    '<ul data-type="task-list">'
+    '<li data-type="task-item"><input type="checkbox"> Do it</li></ul>',
+    '<ul data-type="decision-list">'
+    '<li data-type="decision-item" data-state="DECIDED">Agreed</li></ul>',
+    "<details><summary>More</summary><p>x</p></details>",
+    '<pre><code class="language-json">{"a": 1}</code></pre>',
+    '<p>On <time datetime="2026-09-17">17 September 2026</time>.</p>',
+    '<p><a href="https://example.com/x" data-card-appearance="inline"></a></p>',
+    "<ul><li><p>one</p></li></ul>",
+    "<ol><li><p>one</p></li></ol>",
+    '<table data-width="400"><tbody><tr>'
+    '<td data-colwidth="400"><p>x</p></td></tr></tbody></table>',
+    '<section data-type="layout-two-equal">'
+    '<div data-type="column"><p>L</p></div>'
+    '<div data-type="column"><p>R</p></div></section>',
+]
+
+
+class TestRoundTrip(unittest.TestCase):
+    def test_every_pattern_survives_html_to_adf_to_html_to_adf(self):
+        """Stability is the property that matters, not string equality.
+
+        A second pass through the converter must produce the same ADF as the
+        first. That is what makes a fetch-splice-verify update safe: the
+        untouched parts of a fetched body come back unchanged.
+        """
+        for fragment in ROUND_TRIP_CASES:
+            with self.subTest(fragment=fragment):
+                once = html_to_adf(fragment)
+                twice = html_to_adf(adf_to_html(once))
+                self.assertEqual(once, twice)
+
+
+class TestAdfToMarkdown(unittest.TestCase):
+    def test_paragraph_and_heading(self):
+        doc = html_to_adf("<h2>Title</h2><p>Body.</p>")
+        self.assertEqual(adf_to_markdown(doc), "## Title\n\nBody.")
+
+    def test_panel_becomes_a_labelled_blockquote(self):
+        doc = html_to_adf('<div data-type="panel-warning"><p>Careful.</p></div>')
+        self.assertIn("> **Warning:** Careful.", adf_to_markdown(doc))
+
+    def test_status_becomes_bracketed_text(self):
+        doc = html_to_adf(
+            '<p><span data-type="status" data-color="green">Built</span></p>'
+        )
+        self.assertEqual(adf_to_markdown(doc), "[Built]")
+
+    def test_task_list_becomes_gfm_checkboxes(self):
+        doc = html_to_adf(
+            '<ul data-type="task-list">'
+            '<li data-type="task-item"><input type="checkbox"> A</li>'
+            '<li data-type="task-item"><input type="checkbox" checked> B</li></ul>'
+        )
+        md = adf_to_markdown(doc)
+        self.assertIn("- [ ] A", md)
+        self.assertIn("- [x] B", md)
+
+    def test_code_block_keeps_its_language(self):
+        doc = html_to_adf('<pre><code class="language-json">{"a": 1}</code></pre>')
+        self.assertEqual(adf_to_markdown(doc), '```json\n{"a": 1}\n```')
+
+
+class TestReverseCli(unittest.TestCase):
+    def _run(self, args, stdin):
+        return subprocess.run(
+            [sys.executable, str(SCRIPTS / "htmlplus.py")] + args,
+            input=stdin, capture_output=True, text=True,
+        )
+
+    def test_to_html(self):
+        adf = json.dumps(html_to_adf("<p>Hi.</p>"))
+        r = self._run(["to-html"], adf)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.strip(), "<p>Hi.</p>")
+
+    def test_to_markdown(self):
+        adf = json.dumps(html_to_adf("<h2>T</h2>"))
+        r = self._run(["to-markdown"], adf)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.strip(), "## T")
 
 
 if __name__ == "__main__":

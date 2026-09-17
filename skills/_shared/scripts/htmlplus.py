@@ -577,14 +577,254 @@ def html_to_adf(fragment):
     return builder.doc
 
 
+# --- ADF back to HTML+ ---
+
+_MARK_TAGS = {"strong": "strong", "em": "em", "code": "code",
+              "strike": "s", "underline": "u"}
+_PANEL_LABELS = {"info": "Info", "note": "Note", "success": "Success",
+                 "warning": "Warning", "error": "Error"}
+_LAYOUT_BY_COUNT = {1: "layout-section", 2: "layout-two-equal",
+                    3: "layout-three-equal"}
+
+
+def _escape(text):
+    return (text.replace("&", "&amp;").replace("<", "&lt;")
+                .replace(">", "&gt;"))
+
+
+def _timestamp_to_iso(ms):
+    import datetime
+    return datetime.datetime.fromtimestamp(
+        int(ms) / 1000, tz=datetime.timezone.utc
+    ).strftime("%Y-%m-%d")
+
+
+def _inline_to_html(node):
+    t = node.get("type")
+    if t == "text":
+        out = _escape(node["text"])
+        for mark in node.get("marks", []):
+            mt = mark["type"]
+            if mt == "link":
+                out = f'<a href="{mark["attrs"]["href"]}">{out}</a>'
+            elif mt == "subsup":
+                tag = mark["attrs"]["type"]
+                out = f"<{tag}>{out}</{tag}>"
+            elif mt in _MARK_TAGS:
+                tag = _MARK_TAGS[mt]
+                out = f"<{tag}>{out}</{tag}>"
+        return out
+    if t == "status":
+        a = node["attrs"]
+        return (f'<span data-type="status" data-color="{a["color"]}">'
+                f'{_escape(a["text"])}</span>')
+    if t == "date":
+        iso = _timestamp_to_iso(node["attrs"]["timestamp"])
+        return f'<time datetime="{iso}">{iso}</time>'
+    if t == "inlineCard":
+        return f'<a href="{node["attrs"]["url"]}" data-card-appearance="inline"></a>'
+    if t == "hardBreak":
+        return "<br>"
+    return ""
+
+
+def _children_html(node):
+    return "".join(_node_to_html(c) for c in node.get("content", []))
+
+
+def _inline_html(node):
+    return "".join(_inline_to_html(c) for c in node.get("content", []))
+
+
+def _node_to_html(node):
+    t = node.get("type")
+    a = node.get("attrs", {})
+    if t == "paragraph":
+        return f"<p>{_inline_html(node)}</p>"
+    if t == "heading":
+        level = a["level"]
+        return f"<h{level}>{_inline_html(node)}</h{level}>"
+    if t == "panel":
+        return f'<div data-type="panel-{a["panelType"]}">{_children_html(node)}</div>'
+    if t == "expand":
+        return (f'<details><summary>{_escape(a.get("title", ""))}</summary>'
+                f"{_children_html(node)}</details>")
+    if t == "codeBlock":
+        text = "".join(c.get("text", "") for c in node.get("content", []))
+        lang = a.get("language", "plaintext")
+        return f'<pre><code class="language-{lang}">{_escape(text)}</code></pre>'
+    if t == "taskList":
+        return f'<ul data-type="task-list">{_children_html(node)}</ul>'
+    if t == "taskItem":
+        checked = " checked" if a.get("state") == "DONE" else ""
+        return (f'<li data-type="task-item"><input type="checkbox"{checked}>'
+                f"{_inline_html(node)}</li>")
+    if t == "decisionList":
+        return f'<ul data-type="decision-list">{_children_html(node)}</ul>'
+    if t == "decisionItem":
+        return (f'<li data-type="decision-item" data-state="{a.get("state", "DECIDED")}">'
+                f"{_inline_html(node)}</li>")
+    if t == "bulletList":
+        return f"<ul>{_children_html(node)}</ul>"
+    if t == "orderedList":
+        return f"<ol>{_children_html(node)}</ol>"
+    if t == "listItem":
+        return f"<li>{_children_html(node)}</li>"
+    if t == "blockquote":
+        return f"<blockquote>{_children_html(node)}</blockquote>"
+    if t == "rule":
+        return "<hr>"
+    if t == "table":
+        bits = []
+        if "width" in a:
+            bits.append(f'data-width="{a["width"]}"')
+        if "layout" in a:
+            bits.append(f'data-layout="{a["layout"]}"')
+        if a.get("isNumberColumnEnabled"):
+            bits.append('data-number-column="true"')
+        if "displayMode" in a:
+            bits.append(f'data-display-mode="{a["displayMode"]}"')
+        open_tag = "<table" + ("" if not bits else " " + " ".join(bits)) + ">"
+        return f"{open_tag}<tbody>{_children_html(node)}</tbody></table>"
+    if t == "tableRow":
+        return f"<tr>{_children_html(node)}</tr>"
+    if t in ("tableCell", "tableHeader"):
+        tag = "td" if t == "tableCell" else "th"
+        bits = []
+        if "colwidth" in a:
+            bits.append(f'data-colwidth="{a["colwidth"][0]}"')
+        for key in ("colspan", "rowspan"):
+            if key in a:
+                bits.append(f'{key}="{a[key]}"')
+        open_tag = f"<{tag}" + ("" if not bits else " " + " ".join(bits)) + ">"
+        return f"{open_tag}{_children_html(node)}</{tag}>"
+    if t == "layoutSection":
+        count = len(node.get("content", []))
+        layout = _LAYOUT_BY_COUNT.get(count, "layout-two-equal")
+        return f'<section data-type="{layout}">{_children_html(node)}</section>'
+    if t == "layoutColumn":
+        return f'<div data-type="column">{_children_html(node)}</div>'
+    if t in ("blockCard", "embedCard"):
+        appearance = "block" if t == "blockCard" else "embed"
+        return f'<a href="{a["url"]}" data-card-appearance="{appearance}"></a>'
+    return _inline_to_html(node)
+
+
+def adf_to_html(doc):
+    """Render an ADF document as an HTML+ fragment."""
+    return "".join(_node_to_html(n) for n in doc.get("content", []))
+
+
+# --- ADF to markdown, one way only ---
+
+def _inline_md(node):
+    out = []
+    for child in node.get("content", []):
+        t = child.get("type")
+        if t == "text":
+            text = child["text"]
+            for mark in child.get("marks", []):
+                mt = mark["type"]
+                if mt == "strong":
+                    text = f"**{text}**"
+                elif mt == "em":
+                    text = f"*{text}*"
+                elif mt == "code":
+                    text = f"`{text}`"
+                elif mt == "link":
+                    text = f'[{text}]({mark["attrs"]["href"]})'
+            out.append(text)
+        elif t == "status":
+            out.append(f'[{child["attrs"]["text"]}]')
+        elif t == "date":
+            out.append(_timestamp_to_iso(child["attrs"]["timestamp"]))
+        elif t == "inlineCard":
+            out.append(child["attrs"]["url"])
+    return "".join(out)
+
+
+def _node_to_md(node, depth=0):
+    t = node.get("type")
+    a = node.get("attrs", {})
+    if t == "paragraph":
+        return _inline_md(node)
+    if t == "heading":
+        return "#" * a["level"] + " " + _inline_md(node)
+    if t == "panel":
+        label = _PANEL_LABELS.get(a.get("panelType", "info"), "Note")
+        inner = "\n".join(_node_to_md(c) for c in node.get("content", []))
+        return "\n".join(f"> **{label}:** {line}" if i == 0 else f"> {line}"
+                         for i, line in enumerate(inner.splitlines()))
+    if t == "codeBlock":
+        text = "".join(c.get("text", "") for c in node.get("content", []))
+        return f'```{a.get("language", "")}\n{text}\n```'
+    if t == "taskList":
+        return "\n".join(_node_to_md(c) for c in node.get("content", []))
+    if t == "taskItem":
+        box = "x" if a.get("state") == "DONE" else " "
+        return f"- [{box}] {_inline_md(node).strip()}"
+    if t == "decisionList":
+        return "\n".join(_node_to_md(c) for c in node.get("content", []))
+    if t == "decisionItem":
+        return f'- ({a.get("state", "DECIDED").lower()}) {_inline_md(node).strip()}'
+    if t in ("bulletList", "orderedList"):
+        marker = "-" if t == "bulletList" else "1."
+        return "\n".join(
+            f"{'  ' * depth}{marker} "
+            + "\n".join(_node_to_md(g, depth + 1)
+                        for g in c.get("content", [])).strip()
+            for c in node.get("content", [])
+        )
+    if t == "expand":
+        inner = "\n\n".join(_node_to_md(c) for c in node.get("content", []))
+        return f'**{a.get("title", "")}**\n\n{inner}'
+    if t == "blockquote":
+        inner = "\n".join(_node_to_md(c) for c in node.get("content", []))
+        return "\n".join(f"> {line}" for line in inner.splitlines())
+    if t == "rule":
+        return "---"
+    if t == "table":
+        rows = []
+        for row in node.get("content", []):
+            cells = [" ".join(_node_to_md(c) for c in cell.get("content", []))
+                     for cell in row.get("content", [])]
+            rows.append("| " + " | ".join(cells) + " |")
+            if len(rows) == 1:
+                rows.append("|" + "|".join([" --- "] * len(cells)) + "|")
+        return "\n".join(rows)
+    if t in ("layoutSection", "layoutColumn"):
+        return "\n\n".join(_node_to_md(c) for c in node.get("content", []))
+    if t in ("blockCard", "embedCard"):
+        return a.get("url", "")
+    return ""
+
+
+def adf_to_markdown(doc):
+    """Render an ADF document as lossy markdown, for reading only.
+
+    A panel becomes a labelled blockquote and a lozenge becomes bracketed
+    text, because markdown has no syntax for either. Converting this back and
+    writing it to the page destroys every native component on it, which is why
+    the skills never do that: editing goes through HTML+.
+    """
+    return "\n\n".join(
+        block for block in (_node_to_md(n) for n in doc.get("content", []))
+        if block
+    )
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("command", choices=["to-adf"])
+    parser.add_argument("command", choices=["to-adf", "to-html", "to-markdown"])
     args = parser.parse_args(argv)
     try:
         if args.command == "to-adf":
             doc = html_to_adf(sys.stdin.read())
             json.dump(doc, sys.stdout, separators=(",", ":"))
+        elif args.command == "to-html":
+            sys.stdout.write(adf_to_html(json.load(sys.stdin)))
+        elif args.command == "to-markdown":
+            sys.stdout.write(adf_to_markdown(json.load(sys.stdin)))
     except ConversionError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
