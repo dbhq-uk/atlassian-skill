@@ -283,5 +283,94 @@ class TestParkedTextAccumulates(unittest.TestCase):
         self.assertEqual(node["attrs"], {"title": "Full change log"})
 
 
+TABLE = (
+    '<table data-width="1800">'
+    "<thead><tr>"
+    '<th data-colwidth="242"><p>Item</p></th>'
+    '<th data-colwidth="1478"><p>What it means</p></th>'
+    "</tr></thead>"
+    "<tbody><tr>"
+    '<td data-colwidth="242"><p>A</p></td>'
+    '<td data-colwidth="1478"><p>B</p></td>'
+    "</tr></tbody>"
+    "</table>"
+)
+
+
+class TestTables(unittest.TestCase):
+    def test_table_shape(self):
+        doc = html_to_adf(TABLE)
+        node = doc["content"][0]
+        self.assertEqual(node["type"], "table")
+        self.assertEqual(node["attrs"]["width"], 1800)
+        self.assertEqual(len(node["content"]), 2)
+        self.assertEqual(node["content"][0]["type"], "tableRow")
+        self.assertEqual(node["content"][0]["content"][0]["type"], "tableHeader")
+        self.assertEqual(node["content"][1]["content"][0]["type"], "tableCell")
+
+    def test_colwidth_becomes_a_list_of_ints(self):
+        doc = html_to_adf(TABLE)
+        cell = doc["content"][0]["content"][0]["content"][0]
+        self.assertEqual(cell["attrs"]["colwidth"], [242])
+
+    def test_layout_and_number_column_attributes(self):
+        doc = html_to_adf(
+            '<table data-width="400" data-layout="center" data-number-column="true">'
+            '<tbody><tr><td data-colwidth="400"><p>x</p></td></tr></tbody></table>'
+        )
+        attrs = doc["content"][0]["attrs"]
+        self.assertEqual(attrs["layout"], "center")
+        self.assertTrue(attrs["isNumberColumnEnabled"])
+
+    def test_a_unit_on_colwidth_is_rejected(self):
+        with self.assertRaises(ConversionError) as cm:
+            html_to_adf(
+                '<table data-width="400"><tbody><tr>'
+                '<td data-colwidth="242px"><p>x</p></td></tr></tbody></table>'
+            )
+        self.assertIn("242px", str(cm.exception))
+        self.assertIn("plain number", str(cm.exception))
+
+    def test_a_percentage_on_colwidth_is_rejected(self):
+        with self.assertRaises(ConversionError) as cm:
+            html_to_adf(
+                '<table data-width="400"><tbody><tr>'
+                '<td data-colwidth="50%"><p>x</p></td></tr></tbody></table>'
+            )
+        self.assertIn("50%", str(cm.exception))
+
+    def test_a_column_missing_colwidth_on_one_cell_is_rejected(self):
+        # Confluence resets the whole table to even columns, which reads as a
+        # formatting regression to everyone who sees the diff.
+        with self.assertRaises(ConversionError) as cm:
+            html_to_adf(
+                '<table data-width="400">'
+                '<thead><tr><th data-colwidth="200"><p>A</p></th>'
+                '<th data-colwidth="200"><p>B</p></th></tr></thead>'
+                "<tbody><tr><td><p>x</p></td>"
+                '<td data-colwidth="200"><p>y</p></td></tr></tbody></table>'
+            )
+        self.assertIn("column 1", str(cm.exception))
+        self.assertIn("data-colwidth", str(cm.exception))
+
+    def test_a_column_with_two_different_widths_is_rejected(self):
+        with self.assertRaises(ConversionError) as cm:
+            html_to_adf(
+                '<table data-width="400">'
+                '<thead><tr><th data-colwidth="200"><p>A</p></th></tr></thead>'
+                '<tbody><tr><td data-colwidth="300"><p>x</p></td></tr></tbody></table>'
+            )
+        self.assertIn("column 1", str(cm.exception))
+        self.assertIn("200", str(cm.exception))
+        self.assertIn("300", str(cm.exception))
+
+    def test_a_table_with_no_widths_at_all_is_allowed(self):
+        # Sizing is a house-style rule, not an API rule. An unsized table is
+        # valid ADF, so the converter passes it and the checklist catches it.
+        doc = html_to_adf("<table><tbody><tr><td><p>x</p></td></tr></tbody></table>")
+        self.assertEqual(doc["content"][0]["type"], "table")
+        self.assertNotIn("colwidth", doc["content"][0]["content"][0]["content"][0]["attrs"])
+
+
 if __name__ == "__main__":
     unittest.main()

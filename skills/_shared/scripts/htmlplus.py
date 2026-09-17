@@ -96,6 +96,13 @@ class _Builder(HTMLParser):
         self._in_summary = False
         self._in_time = False
         self._in_card = False
+        # One frame per currently-open <table>, innermost last. Each frame is
+        # {"cell_index": int, "widths": {column index: set of widths seen}},
+        # where None in a widths set means "no attribute". Scoped per table
+        # rather than one flat pair of attributes, so a table nested inside
+        # another table's cell tracks its own columns without corrupting or
+        # being corrupted by the columns of the table it sits in.
+        self._table_stack = []
 
     # --- helpers ---
 
@@ -107,6 +114,33 @@ class _Builder(HTMLParser):
     def _close(self):
         if len(self.blocks) > 1:
             self.blocks.pop()
+
+    def _record_width(self, index, raw):
+        frame = self._table_stack[-1]
+        frame["widths"].setdefault(index, set()).add(raw)
+
+    def _check_column_widths(self, widths):
+        """Every cell of a column carries the same data-colwidth, or none does.
+
+        Confluence silently resets a table to evenly distributed columns when
+        one cell in a column is missing the attribute, and that reads as a
+        formatting regression to everyone who sees the diff. So it is caught
+        here, before the call.
+        """
+        for index, seen_widths in sorted(widths.items()):
+            if len(seen_widths) == 1:
+                continue
+            if None in seen_widths:
+                raise ConversionError(
+                    f"Table column {index + 1}: data-colwidth is on some cells "
+                    f"and not others. Put it on every cell of the column, "
+                    f"header and body alike, with the same value."
+                )
+            seen = ", ".join(sorted(w for w in seen_widths if w is not None))
+            raise ConversionError(
+                f"Table column {index + 1}: two different data-colwidth "
+                f"values ({seen}). Every cell of a column takes the same one."
+            )
 
     def _current_marks(self):
         # A list of dicts, deduplicated by type, in the order they were opened.
@@ -238,6 +272,44 @@ class _Builder(HTMLParser):
         elif tag in SIMPLE_BLOCKS:
             self._open({"type": SIMPLE_BLOCKS[tag]})
 
+        elif tag == "table":
+            attrs_out = {}
+            if "data-width" in a:
+                attrs_out["width"] = int(a["data-width"])
+            if "data-layout" in a:
+                attrs_out["layout"] = a["data-layout"]
+            if a.get("data-number-column") == "true":
+                attrs_out["isNumberColumnEnabled"] = True
+            if a.get("data-display-mode"):
+                attrs_out["displayMode"] = a["data-display-mode"]
+            self._open({"type": "table", "attrs": attrs_out})
+            self._table_stack.append({"cell_index": 0, "widths": {}})
+        elif tag in ("thead", "tbody", "tfoot"):
+            # Not ADF nodes. Rows sit directly on the table.
+            pass
+        elif tag == "tr":
+            self._open({"type": "tableRow"})
+            self._table_stack[-1]["cell_index"] = 0
+        elif tag in ("th", "td"):
+            node_type = "tableHeader" if tag == "th" else "tableCell"
+            cell_attrs = {}
+            raw = a.get("data-colwidth")
+            if raw is not None:
+                if not raw.isdigit():
+                    raise ConversionError(
+                        f'data-colwidth="{raw}" is not a plain number. '
+                        f"Confluence drops anything else rather than coercing "
+                        f"it. Write 242, never 242px and never 50%."
+                    )
+                cell_attrs["colwidth"] = [int(raw)]
+            for key, attr in (("colspan", "colspan"), ("rowspan", "rowspan")):
+                if key in a:
+                    cell_attrs[attr] = int(a[key])
+            frame = self._table_stack[-1]
+            self._record_width(frame["cell_index"], raw)
+            frame["cell_index"] += 1
+            self._open({"type": node_type, "attrs": cell_attrs})
+
         else:
             raise ConversionError(
                 f"<{tag}{' data-type=' + dtype if dtype else ''}> is not a "
@@ -286,6 +358,14 @@ class _Builder(HTMLParser):
             self._close()
         elif tag in ("p", "div", "details", "pre", "ol", "blockquote") \
                 or tag in HEADINGS or tag in ("ul", "li"):
+            self._close()
+        elif tag == "table":
+            frame = self._table_stack.pop()
+            self._check_column_widths(frame["widths"])
+            self._close()
+        elif tag in ("thead", "tbody", "tfoot"):
+            pass
+        elif tag in ("tr", "th", "td"):
             self._close()
 
     def handle_data(self, data):
