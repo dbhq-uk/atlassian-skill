@@ -6,8 +6,28 @@
 # credentials and the method from a 0600 config file, so the token is not
 # visible in `ps`, in shell history, or in any process listing.
 
-CONFIG_DIR="$HOME/.jira"
+# Settings live under ~/.dbhq/<skill>/, which is the house rule for every DBHQ
+# skill: one directory per skill, never a new top-level dotfile in $HOME. This
+# was ~/.jira until 17 Sep 2026.
+#
+# The move happens here, on first run, guarded on the new directory not
+# existing - so an existing install keeps working and nobody has to be told to
+# move a file. mv preserves the 600 mode on config.json.
+CONFIG_DIR="$HOME/.dbhq/jira"
 CONFIG_FILE="$CONFIG_DIR/config.json"
+LEGACY_DIR="$HOME/.jira"
+
+jira_migrate_legacy_config() {
+    [ -d "$CONFIG_DIR" ] && return 0
+    [ -d "$LEGACY_DIR" ] || return 0
+    mkdir -p "$HOME/.dbhq"
+    chmod 700 "$HOME/.dbhq" 2>/dev/null || true
+    mv "$LEGACY_DIR" "$CONFIG_DIR"
+    chmod 700 "$CONFIG_DIR" 2>/dev/null || true
+    echo "Moved Jira credentials from $LEGACY_DIR to $CONFIG_DIR." >&2
+}
+
+jira_migrate_legacy_config
 
 require_config() {
     if [ ! -f "$CONFIG_FILE" ]; then

@@ -15,7 +15,7 @@ and no telemetry.
 
 ### Credentials
 
-`~/.jira/config.json`, mode 600, holding `site`, `email` and an API token. It is
+`~/.dbhq/jira/config.json`, mode 600, holding `site`, `email` and an API token. It is
 written outside any repository. Setup verifies the credential against
 `/rest/api/3/myself` before writing anything, so a wrong token costs you nothing.
 

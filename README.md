@@ -75,7 +75,7 @@ on your Atlassian account, and an API token from
 hidden.
 
 Setup verifies against `/rest/api/3/myself` **before** writing anything, so a
-wrong token costs you nothing. Credentials are saved to `~/.jira/config.json` at
+wrong token costs you nothing. Credentials are saved to `~/.dbhq/jira/config.json` at
 mode 600, outside any repository.
 
 The token never reaches a command line. `curl` reads it from a 0600 config file,

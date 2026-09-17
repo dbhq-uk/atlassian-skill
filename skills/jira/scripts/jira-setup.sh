@@ -4,8 +4,21 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_DIR="$HOME/.jira"
+# See _common.sh for the ~/.jira -> ~/.dbhq/jira move and why it is guarded the
+# way it is. Repeated rather than sourced: setup must run before any credential
+# exists, and _common.sh's require_config assumes one does.
+CONFIG_DIR="$HOME/.dbhq/jira"
 CONFIG_FILE="$CONFIG_DIR/config.json"
+LEGACY_DIR="$HOME/.jira"
+
+if [ ! -d "$CONFIG_DIR" ] && [ -d "$LEGACY_DIR" ]; then
+    mkdir -p "$HOME/.dbhq"
+    chmod 700 "$HOME/.dbhq" 2>/dev/null || true
+    mv "$LEGACY_DIR" "$CONFIG_DIR"
+    chmod 700 "$CONFIG_DIR" 2>/dev/null || true
+    echo "Moved Jira credentials from $LEGACY_DIR to $CONFIG_DIR."
+    echo
+fi
 
 echo "=== Jira Cloud API setup ==="
 echo
