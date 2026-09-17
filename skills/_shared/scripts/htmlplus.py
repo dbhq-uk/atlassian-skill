@@ -86,6 +86,14 @@ FORBIDDEN_CHILDREN = {
     "blockquote": {"blockquote", "heading", "table", "panel", "expand",
                    "layoutSection"},
     "table": {"table"},
+    # A paragraph is not covered by the shared None/inline-only sentinel
+    # below, because it legitimately holds non-block inline content that
+    # sentinel would reject too (status, date, inlineCard) - it only needs
+    # to reject the block-shaped things a <p> can end up wrapping through
+    # this parser, notably a block/embed card that was written nested
+    # inside a paragraph rather than left as a sibling of it.
+    "paragraph": {"blockCard", "embedCard", "table", "panel", "expand",
+                  "layoutSection", "heading", "rule"},
     # Inline-content-only containers: any block child at all is a violation.
     "taskItem": None,
     "decisionItem": None,
@@ -603,7 +611,14 @@ def _inline_to_html(node):
     t = node.get("type")
     if t == "text":
         out = _escape(node["text"])
-        for mark in node.get("marks", []):
+        # Marks are stored outer-to-inner, in the order the source tags
+        # opened (html_to_adf pushes onto self.marks as each tag opens, so
+        # the first mark in the list is the outermost). Applying them in
+        # that same order here would wrap innermost-first instead - the
+        # opposite sense - and reverse the nesting on every pass. Walking
+        # the list in reverse re-applies the innermost mark first, which
+        # rebuilds the original nesting.
+        for mark in reversed(node.get("marks", [])):
             mt = mark["type"]
             if mt == "link":
                 out = f'<a href="{mark["attrs"]["href"]}">{out}</a>'
@@ -625,7 +640,21 @@ def _inline_to_html(node):
         return f'<a href="{node["attrs"]["url"]}" data-card-appearance="inline"></a>'
     if t == "hardBreak":
         return "<br>"
-    return ""
+    # Reached for any ADF node type this converter does not know how to
+    # render - both a genuinely unrecognised block type falling through
+    # _node_to_html's chain, and an unrecognised inline leaf. A real fetched
+    # Confluence page can carry node types this converter has no HTML+ for
+    # (media, mention, emoji, extension, nestedExpand and more) - html_to_adf
+    # already refuses an unrecognised HTML tag, so the reverse path has to
+    # refuse symmetrically rather than silently drop the node: this feeds
+    # the write-back path of fetch/splice/verify, and a page this converter
+    # cannot faithfully round-trip is a page it must not be allowed to
+    # overwrite.
+    raise ConversionError(
+        f'ADF node type "{t}" is not supported by this converter, so this '
+        f'page cannot be safely edited through this skill until support '
+        f'for "{t}" is added.'
+    )
 
 
 def _children_html(node):
@@ -796,7 +825,13 @@ def _node_to_md(node, depth=0):
         return "\n\n".join(_node_to_md(c) for c in node.get("content", []))
     if t in ("blockCard", "embedCard"):
         return a.get("url", "")
-    return ""
+    # Deliberately not a ConversionError, unlike adf_to_html's equivalent
+    # fallback. This rendering is documented one-way and read-only, never
+    # written back, so there is no unsafe overwrite to guard against - an
+    # agent trying to understand a page is better served by a page it can
+    # read with the gap marked than by a hard failure over one node it
+    # cannot render.
+    return f"[unsupported node: {t}]"
 
 
 def adf_to_markdown(doc):

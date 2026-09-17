@@ -635,6 +635,20 @@ class TestNesting(unittest.TestCase):
             "layoutSection", "blockquote",
         )
 
+    # -- Finding 3 (review, Task 7): a block/embed card nested inside a
+    # paragraph had no FORBIDDEN_CHILDREN rule, so html_to_adf accepted it,
+    # and adf_to_html's inline renderer had no branch for it either - the
+    # card silently vanished on the way back to HTML+. Fixed on the forward
+    # side: refuse the malformed input at authoring time rather than try to
+    # round-trip it.
+
+    def test_paragraph_cannot_hold_a_block_card(self):
+        self._rejects(
+            '<p><a href="https://example.com/x" '
+            'data-card-appearance="block"></a></p>',
+            "blockCard", "paragraph",
+        )
+
 
 ROUND_TRIP_CASES = [
     "<p>Hello.</p>",
@@ -658,6 +672,12 @@ ROUND_TRIP_CASES = [
     '<section data-type="layout-two-equal">'
     '<div data-type="column"><p>L</p></div>'
     '<div data-type="column"><p>R</p></div></section>',
+    # Two or more marks on the same run. Regression case for the mark-order
+    # bug found in review: the emitter was applying marks[0] innermost,
+    # opposite the sense the forward parser stores them in, so nesting
+    # reversed on every pass.
+    "<p><strong><em>both</em></strong></p>",
+    '<p><a href="https://example.com/x"><strong>link</strong></a></p>',
 ]
 
 
@@ -674,6 +694,59 @@ class TestRoundTrip(unittest.TestCase):
                 once = html_to_adf(fragment)
                 twice = html_to_adf(adf_to_html(once))
                 self.assertEqual(once, twice)
+
+    def test_two_marks_keep_their_source_nesting_order(self):
+        # Finding 2 (review, Task 7): the emitter applied marks[0]
+        # innermost, the opposite of how html_to_adf stores them (outer to
+        # inner, in tag-open order), so bold-inside-em became em-inside-bold
+        # on every pass. Asserting the exact string, not just round-trip
+        # stability, so a future regression fails with a readable diff
+        # rather than a bare ADF inequality.
+        doc = html_to_adf("<p><strong><em>both</em></strong></p>")
+        self.assertEqual(adf_to_html(doc), "<p><strong><em>both</em></strong></p>")
+
+
+class TestUnsupportedAdfNode(unittest.TestCase):
+    """Finding 1 (review, Task 7): a node type this converter cannot render.
+
+    A real fetched Confluence page can carry node types this converter has
+    no HTML+ for - media, mention, emoji, extension and more. There is no
+    HTML+ syntax to construct one through html_to_adf, so these ADF
+    documents are built directly, the way a page fetched from the API would
+    arrive.
+    """
+
+    UNSUPPORTED_DOC = {
+        "type": "doc", "version": 1,
+        "content": [
+            {"type": "paragraph",
+             "content": [{"type": "text", "text": "Before."}]},
+            {"type": "mediaSingle", "attrs": {"layout": "center"},
+             "content": [{"type": "media",
+                          "attrs": {"type": "file", "id": "abc123",
+                                    "collection": "x"}}]},
+            {"type": "paragraph",
+             "content": [{"type": "text", "text": "After."}]},
+        ],
+    }
+
+    def test_adf_to_html_refuses_rather_than_drop_the_node(self):
+        # It feeds the write path (fetch, splice, verify, write back), so
+        # silently dropping content there is the one outcome worse than a
+        # hard failure - refusing means the page is never overwritten with
+        # data missing.
+        with self.assertRaises(ConversionError) as cm:
+            adf_to_html(self.UNSUPPORTED_DOC)
+        self.assertIn("mediaSingle", str(cm.exception))
+
+    def test_adf_to_markdown_marks_the_gap_instead_of_raising(self):
+        # Documented one-way and read-only, never written back, so there is
+        # no unsafe overwrite to guard against - a visible placeholder beats
+        # a hard failure for an agent that is only trying to read the page.
+        md = adf_to_markdown(self.UNSUPPORTED_DOC)
+        self.assertIn("Before.", md)
+        self.assertIn("[unsupported node: mediaSingle]", md)
+        self.assertIn("After.", md)
 
 
 class TestAdfToMarkdown(unittest.TestCase):
