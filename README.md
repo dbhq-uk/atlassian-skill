@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/logo.svg" alt="jira - create and read Jira Cloud issues from your agent, by DBHQ" width="420">
+<img src="assets/logo.svg" alt="atlassian - Jira issues and Confluence pages from your agent, by DBHQ" width="560">
 
 # jira
 
