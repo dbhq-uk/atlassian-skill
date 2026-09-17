@@ -52,7 +52,7 @@ and catches the things a reader notices first.
 - [ ] Dates are `<time>` nodes; prose dates are written out (17 September 2026).
 - [ ] Any convention from `~/.dbhq/atlassian/house-style.md` has been applied.
 - [ ] No em dashes.
-- [ ] No financial or reserve figure without a verified source.
+- [ ] No figure appears without a verified source.
 - [ ] The page states its register if it uses a constrained one.
 - [ ] A read-through has removed: conclusions drawn for the reader, process
       narration, doubled hedges, justified requests, scaffolding preambles,

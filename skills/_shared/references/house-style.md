@@ -63,13 +63,13 @@ across every page in a set.
 
 Concise, Title Case, and `&` rather than "and".
 
-- **"Quarterly Review Agenda & Record"**, not "Quarterly review agenda and record".
+- **"Onboarding Guide & Checklist"**, not "Onboarding guide and checklist".
 - Concise means the shortest phrase that still identifies the page. Trim the
   explainer, keep the identity.
 - Prefer a short distinct name over a long prefixed one. A parent page already
   supplies the context, so a child does not need to repeat it in full.
 - Avoid ASCII decoration in a title (`<-->`, `|`, `=>`). If two systems need
-  naming, name them: **"Orders to Billing Integration"**.
+  naming, name them: **"Orders to Fulfilment Integration"**.
 
 ---
 
@@ -187,8 +187,8 @@ of these.
 
 ## 6 · Updating a page that already exists
 
-**An update replaces the whole body.** There is no partial edit, so the safe
-route is always fetch, splice, verify:
+**An update replaces the whole body.** There is no partial edit, so the
+reliable route is always fetch, splice, verify:
 
 1. **Fetch the current body immediately before writing**, in the same format
    you intend to publish. Not a copy read earlier in the session: another

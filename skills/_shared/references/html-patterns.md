@@ -58,7 +58,7 @@ bold words is not.
 
 <ul data-type="decision-list">
   <li data-type="decision-item" data-state="DECIDED">Payments correlate on <code>reference</code>, resolved back to <code>transactionId</code></li>
-  <li data-type="decision-item" data-state="UNDECIDED">The expenses destination</li>
+  <li data-type="decision-item" data-state="UNDECIDED">The expenses-system destination</li>
 </ul>
 ```
 
@@ -119,16 +119,16 @@ gains none of the reporting.
 <table data-width="1800">
   <thead>
     <tr>
-      <th data-colwidth="242"><p>Item</p></th>
-      <th data-colwidth="1478"><p>What it means</p></th>
-      <th data-colwidth="77"><p>Time</p></th>
+      <th data-colwidth="200"><p>Item</p></th>
+      <th data-colwidth="1500"><p>What it means</p></th>
+      <th data-colwidth="100"><p>Time</p></th>
     </tr>
   </thead>
   <tbody>
     <tr>
-      <td data-colwidth="242"><p>…</p></td>
-      <td data-colwidth="1478"><p>…</p></td>
-      <td data-colwidth="77"><p>40 min</p></td>
+      <td data-colwidth="200"><p>…</p></td>
+      <td data-colwidth="1500"><p>…</p></td>
+      <td data-colwidth="100"><p>40 min</p></td>
     </tr>
   </tbody>
 </table>
@@ -151,7 +151,7 @@ cell that needs a caveat can carry one rather than pushing it into a footnote.
 
 ```html
 <!-- Reference link, and the default: renders the target's live title and icon -->
-<a href="https://mycompany.atlassian.net/wiki/spaces/EA/pages/1234567" data-card-appearance="inline"></a>
+<a href="https://mycompany.atlassian.net/wiki/spaces/DOCS/pages/1234567" data-card-appearance="inline"></a>
 
 <!-- Prose link, where the anchor text has to read as part of the sentence -->
 <p>The <a href="https://…/pages/1234567">contract page</a> gives the field rules.</p>

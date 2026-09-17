@@ -108,13 +108,14 @@ class TestNoSourceProperNouns(unittest.TestCase):
     TestNothingClientSpecific catches shapes: a client-name pattern, a
     hostname, a ticket id, an IP address. It cannot catch a real page title
     or a real system name carried over verbatim, because none of those match
-    any of those shapes - "Quarterly Review Agenda & Record",
-    "Orders to Billing Integration" and "The expenses destination" all sailed
-    through that scan untouched. This test names them directly instead.
+    any of those shapes - a real session-notes page title, a real two-system
+    integration name, and a real destination system name all sailed through
+    that scan untouched. This test names them directly instead.
 
     Built from fragments for the same reason the client-name pattern above
     is: the source's proper nouns do not get to appear contiguously in this
-    public file either, including in the list of things it forbids.
+    public file either, including in the list of things it forbids - and
+    that includes in prose describing them, not only in the list itself.
     """
 
     _SAF = "S" + "A" + "F"
