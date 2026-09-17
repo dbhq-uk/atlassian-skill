@@ -251,8 +251,17 @@ class _Builder(HTMLParser):
                     self.marks.pop(i)
                     break
         elif tag == "span" and self._pending_status is not None:
+            # Strip once here, now every run has been accumulated, rather
+            # than on each handle_data call - that was overwriting instead
+            # of accumulating and losing every run but the last.
+            self._pending_status["attrs"]["text"] = (
+                self._pending_status["attrs"]["text"].strip()
+            )
             self._pending_status = None
         elif tag == "summary":
+            self.blocks[-1]["attrs"]["title"] = (
+                self.blocks[-1]["attrs"]["title"].strip()
+            )
             self._in_summary = False
         elif tag == "time":
             self._in_time = False
@@ -289,10 +298,14 @@ class _Builder(HTMLParser):
         if self._in_time:
             return
         if self._pending_status is not None:
-            self._pending_status["attrs"]["text"] = data.strip()
+            # Accumulate every run rather than overwriting, so inline markup
+            # inside the status (e.g. an <em>) does not drop the runs either
+            # side of it. Stripped once when the <span> closes.
+            self._pending_status["attrs"]["text"] += data
             return
         if self._in_summary:
-            self.blocks[-1]["attrs"]["title"] = data.strip()
+            # Same accumulate-then-strip as status, above.
+            self.blocks[-1]["attrs"]["title"] += data
             return
         if self.blocks[-1] is self.doc:
             raise ConversionError(
@@ -316,6 +329,18 @@ def html_to_adf(fragment):
     builder = _Builder()
     builder.feed(fragment)
     builder.close()
+    if len(builder.blocks) > 1:
+        # Anything left on the stack besides the document itself never saw
+        # its closing tag. Emitting it anyway would hand Confluence a node
+        # still carrying private bookkeeping keys (or simply malformed
+        # nesting) - fail the whole conversion instead, generically, rather
+        # than special-casing any one element.
+        unclosed = builder.blocks[-1]["type"]
+        raise ConversionError(
+            f'Unclosed "{unclosed}" element: the fragment ended before it '
+            f"was closed. Every element that opens a block needs a "
+            f"matching closing tag."
+        )
     return builder.doc
 
 

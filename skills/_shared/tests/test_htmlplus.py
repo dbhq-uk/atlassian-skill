@@ -258,5 +258,30 @@ class TestListsAndLayouts(unittest.TestCase):
         self.assertIn("3 columns", str(cm.exception))
 
 
+class TestUnclosedElementsAreRejected(unittest.TestCase):
+    def test_unclosed_section_is_rejected(self):
+        # An unclosed layout would otherwise emit successfully with its
+        # private _expected/_layout bookkeeping keys still on the node -
+        # invalid ADF, POSTed straight to Confluence.
+        with self.assertRaises(ConversionError) as cm:
+            html_to_adf(
+                '<section data-type="layout-two-equal">'
+                '<div data-type="column"><p>L</p></div>'
+            )
+        self.assertIn("layoutSection", str(cm.exception))
+
+
+class TestParkedTextAccumulates(unittest.TestCase):
+    def test_summary_accumulates_text_around_inline_marks(self):
+        # Inline markup inside <summary> used to split the title into
+        # separate handle_data runs, and each run overwrote the last -
+        # only "log" survived. Every run must accumulate instead.
+        doc = html_to_adf(
+            "<details><summary>Full <em>change</em> log</summary><p>x</p></details>"
+        )
+        node = doc["content"][0]
+        self.assertEqual(node["attrs"], {"title": "Full change log"})
+
+
 if __name__ == "__main__":
     unittest.main()
