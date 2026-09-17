@@ -402,5 +402,143 @@ class TestOrphanTableAndCheckboxTags(unittest.TestCase):
         self.assertIn("task-list item", str(cm.exception))
 
 
+class TestNesting(unittest.TestCase):
+    """One case per row of the nesting table in references/html-patterns.md.
+
+    Each of these is rejected by Confluence with a descriptive error after the
+    call. The point of the converter is that they are rejected here instead.
+    """
+
+    def _rejects(self, fragment, *expected_fragments):
+        with self.assertRaises(ConversionError) as cm:
+            html_to_adf(fragment)
+        message = str(cm.exception)
+        for fragment_text in expected_fragments:
+            self.assertIn(fragment_text, message)
+
+    def test_list_item_cannot_hold_a_heading(self):
+        self._rejects("<ul><li><h2>no</h2></li></ul>", "heading", "listItem")
+
+    def test_list_item_cannot_hold_a_table(self):
+        self._rejects(
+            "<ul><li><table><tbody><tr><td><p>x</p></td></tr></tbody></table></li></ul>",
+            "table", "listItem",
+        )
+
+    def test_list_item_cannot_hold_a_panel(self):
+        self._rejects(
+            '<ul><li><div data-type="panel-info"><p>x</p></div></li></ul>',
+            "panel", "listItem",
+        )
+
+    def test_panel_cannot_hold_a_table(self):
+        self._rejects(
+            '<div data-type="panel-info">'
+            "<table><tbody><tr><td><p>x</p></td></tr></tbody></table></div>",
+            "table", "panel",
+        )
+
+    def test_panel_cannot_hold_an_expand(self):
+        self._rejects(
+            '<div data-type="panel-warning"><details><summary>s</summary>'
+            "<p>x</p></details></div>",
+            "expand", "panel",
+        )
+
+    def test_panel_cannot_nest_in_a_panel(self):
+        self._rejects(
+            '<div data-type="panel-info"><div data-type="panel-note">'
+            "<p>x</p></div></div>",
+            "panel", "panel",
+        )
+
+    def test_expand_cannot_nest_in_an_expand(self):
+        self._rejects(
+            "<details><summary>a</summary><details><summary>b</summary>"
+            "<p>x</p></details></details>",
+            "expand", "expand",
+        )
+
+    def test_expand_cannot_hold_a_layout_section(self):
+        self._rejects(
+            "<details><summary>a</summary>"
+            '<section data-type="layout-two-equal">'
+            '<div data-type="column"><p>L</p></div>'
+            '<div data-type="column"><p>R</p></div>'
+            "</section></details>",
+            "layoutSection", "expand",
+        )
+
+    def test_table_cell_cannot_hold_a_table(self):
+        self._rejects(
+            "<table><tbody><tr><td>"
+            "<table><tbody><tr><td><p>x</p></td></tr></tbody></table>"
+            "</td></tr></tbody></table>",
+            "table", "tableCell",
+        )
+
+    def test_table_cell_cannot_hold_a_layout_section(self):
+        self._rejects(
+            "<table><tbody><tr><td>"
+            '<section data-type="layout-two-equal">'
+            '<div data-type="column"><p>L</p></div>'
+            '<div data-type="column"><p>R</p></div>'
+            "</section></td></tr></tbody></table>",
+            "layoutSection", "tableCell",
+        )
+
+    def test_task_item_cannot_hold_a_block(self):
+        self._rejects(
+            '<ul data-type="task-list"><li data-type="task-item">'
+            "<p>no</p></li></ul>",
+            "paragraph", "taskItem",
+        )
+
+    def test_decision_item_cannot_hold_a_block(self):
+        self._rejects(
+            '<ul data-type="decision-list">'
+            '<li data-type="decision-item" data-state="DECIDED">'
+            "<p>no</p></li></ul>",
+            "paragraph", "decisionItem",
+        )
+
+    def test_heading_cannot_hold_a_block(self):
+        self._rejects("<h2><p>no</p></h2>", "paragraph", "heading")
+
+    def test_blockquote_cannot_nest_in_a_blockquote(self):
+        self._rejects(
+            "<blockquote><blockquote><p>x</p></blockquote></blockquote>",
+            "blockquote", "blockquote",
+        )
+
+    def test_table_cannot_nest_in_a_table_via_an_expand(self):
+        # An expand inside a table cell is allowed and becomes a nested expand,
+        # so this case must still reject on the table, not on the expand.
+        self._rejects(
+            "<table><tbody><tr><td><details><summary>s</summary>"
+            "<table><tbody><tr><td><p>x</p></td></tr></tbody></table>"
+            "</details></td></tr></tbody></table>",
+            "table",
+        )
+
+    def test_a_panel_after_a_list_is_fine(self):
+        # The documented way to attach a panel to a list: close it first.
+        doc = html_to_adf(
+            "<ul><li><p>one</p></li></ul>"
+            '<div data-type="panel-info"><p>note</p></div>'
+        )
+        self.assertEqual(doc["content"][0]["type"], "bulletList")
+        self.assertEqual(doc["content"][1]["type"], "panel")
+
+    def test_an_expand_inside_a_table_cell_is_allowed(self):
+        doc = html_to_adf(
+            '<table><tbody><tr><td data-colwidth="400">'
+            "<details><summary>More</summary><p>x</p></details>"
+            "</td></tr></tbody></table>"
+        )
+        cell = doc["content"][0]["content"][0]["content"][0]
+        self.assertEqual(cell["content"][0]["type"], "expand")
+
+
 if __name__ == "__main__":
     unittest.main()

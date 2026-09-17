@@ -59,6 +59,35 @@ SIMPLE_BLOCKS = {
     "blockquote": "blockquote",
 }
 
+# What each container cannot directly contain, keyed by ADF node type.
+# Straight from the nesting table in references/html-patterns.md, which is in
+# turn ADF's own rules. Confluence rejects a violation with a descriptive
+# error after the call; this is what rejects it before one.
+FORBIDDEN_CHILDREN = {
+    "listItem": {"heading", "table", "blockquote", "panel", "expand",
+                 "layoutSection", "rule"},
+    "panel": {"table", "expand", "blockquote", "embedCard", "panel",
+              "layoutSection"},
+    "expand": {"expand", "layoutSection", "bodiedExtension"},
+    "tableCell": {"table", "layoutSection", "bodiedExtension"},
+    "tableHeader": {"table", "layoutSection", "bodiedExtension"},
+    "blockquote": {"blockquote"},
+    "table": {"table"},
+    # Inline-content-only containers: any block child at all is a violation.
+    "taskItem": None,
+    "decisionItem": None,
+    "heading": None,
+    "codeBlock": None,
+}
+
+# Every block node type this converter emits. Used for the inline-only check.
+BLOCK_TYPES = {
+    "paragraph", "heading", "table", "tableRow", "tableCell", "tableHeader",
+    "panel", "expand", "blockquote", "bulletList", "orderedList", "listItem",
+    "taskList", "taskItem", "decisionList", "decisionItem", "codeBlock",
+    "layoutSection", "layoutColumn", "rule", "blockCard", "embedCard",
+}
+
 
 class ConversionError(Exception):
     """Raised with a message naming the element that could not be converted."""
@@ -107,9 +136,44 @@ class _Builder(HTMLParser):
     # --- helpers ---
 
     def _open(self, node):
+        self._check_nesting(node["type"])
         node.setdefault("content", [])
         self.blocks[-1]["content"].append(node)
         self.blocks.append(node)
+
+    def _check_nesting(self, child_type):
+        """Reject an invalid parent/child pair, naming both.
+
+        Walks the whole stack of open blocks, innermost first, not only the
+        immediate parent. A table nested inside an expand nested inside a
+        table cell is still a table inside a table cell as far as ADF is
+        concerned - the expand itself is a perfectly legal home for a table,
+        so a check that stopped at the nearest ancestor would let that
+        violation through undetected (Confluence would still reject it, just
+        after the call, which is the exact failure mode this function exists
+        to catch first). So every open ancestor that has a rule in
+        FORBIDDEN_CHILDREN gets checked in turn; the walk only stops early
+        when it finds a violation to raise.
+        """
+        for ancestor in reversed(self.blocks):
+            parent_type = ancestor.get("type")
+            if parent_type not in FORBIDDEN_CHILDREN:
+                continue
+            forbidden = FORBIDDEN_CHILDREN[parent_type]
+            if forbidden is None:
+                if child_type in BLOCK_TYPES:
+                    raise ConversionError(
+                        f"A {parent_type} takes inline content only, so it "
+                        f"cannot contain a {child_type}. Close the "
+                        f"{parent_type} and put the {child_type} after it."
+                    )
+                continue
+            if child_type in forbidden:
+                raise ConversionError(
+                    f"A {parent_type} cannot contain a {child_type}. Close "
+                    f"the {parent_type} and put the {child_type} after it as "
+                    f"a sibling."
+                )
 
     def _close(self):
         if len(self.blocks) > 1:
