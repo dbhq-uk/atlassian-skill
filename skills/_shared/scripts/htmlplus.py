@@ -211,6 +211,12 @@ class _Builder(HTMLParser):
         elif tag == "input":
             # The checkbox carries the state of the task item it sits in.
             if "checked" in a:
+                if self.blocks[-1].get("type") != "taskItem":
+                    raise ConversionError(
+                        "<input checked> found outside a task-list item. A "
+                        'checkbox belongs in a task-list item: <li '
+                        'data-type="task-item">.'
+                    )
                 self.blocks[-1]["attrs"]["state"] = "DONE"
 
         elif tag == "ul" and dtype == "decision-list":
@@ -288,9 +294,19 @@ class _Builder(HTMLParser):
             # Not ADF nodes. Rows sit directly on the table.
             pass
         elif tag == "tr":
+            if not self._table_stack:
+                raise ConversionError(
+                    "<tr> found outside a <table>. A row must sit inside a "
+                    "table."
+                )
             self._open({"type": "tableRow"})
             self._table_stack[-1]["cell_index"] = 0
         elif tag in ("th", "td"):
+            if not self._table_stack:
+                raise ConversionError(
+                    f"<{tag}> found outside a <table>. A cell must sit "
+                    f"inside a table."
+                )
             node_type = "tableHeader" if tag == "th" else "tableCell"
             cell_attrs = {}
             raw = a.get("data-colwidth")
@@ -360,6 +376,13 @@ class _Builder(HTMLParser):
                 or tag in HEADINGS or tag in ("ul", "li"):
             self._close()
         elif tag == "table":
+            if not self._table_stack:
+                # A </table> with no matching open <table> - the parser
+                # accepts an unmatched close tag rather than rejecting it,
+                # so this is guarded rather than left to crash on pop().
+                raise ConversionError(
+                    "</table> found with no matching <table> open."
+                )
             frame = self._table_stack.pop()
             self._check_column_widths(frame["widths"])
             self._close()

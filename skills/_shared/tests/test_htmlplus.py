@@ -372,5 +372,35 @@ class TestTables(unittest.TestCase):
         self.assertNotIn("colwidth", doc["content"][0]["content"][0]["content"][0]["attrs"])
 
 
+class TestOrphanTableAndCheckboxTags(unittest.TestCase):
+    # Malformed input must always yield a ConversionError, never a raw
+    # Python traceback - main() only catches ConversionError, so anything
+    # else reaches a CLI caller as an unhandled crash instead of a clean
+    # "Error: ..." message.
+
+    def test_orphan_closing_table_tag_is_rejected(self):
+        with self.assertRaises(ConversionError) as cm:
+            html_to_adf("<p>x</p></table>")
+        self.assertIn("table", str(cm.exception))
+
+    def test_orphan_td_outside_a_table_is_rejected(self):
+        with self.assertRaises(ConversionError) as cm:
+            html_to_adf('<td data-colwidth="1">x</td>')
+        self.assertIn("<td>", str(cm.exception))
+        self.assertIn("table", str(cm.exception))
+
+    def test_orphan_tr_outside_a_table_is_rejected(self):
+        with self.assertRaises(ConversionError) as cm:
+            html_to_adf("<tr><td>x</td></tr>")
+        self.assertIn("<tr>", str(cm.exception))
+        self.assertIn("table", str(cm.exception))
+
+    def test_checked_checkbox_outside_a_task_item_is_rejected(self):
+        with self.assertRaises(ConversionError) as cm:
+            html_to_adf('<p><input type="checkbox" checked></p>')
+        self.assertIn("checkbox", str(cm.exception))
+        self.assertIn("task-list item", str(cm.exception))
+
+
 if __name__ == "__main__":
     unittest.main()
