@@ -539,6 +539,101 @@ class TestNesting(unittest.TestCase):
         cell = doc["content"][0]["content"][0]["content"][0]
         self.assertEqual(cell["content"][0]["type"], "expand")
 
+    # -- Finding A: nodes appended directly bypassed the validator. A live
+    # probe against a real Confluence site showed the v2 API itself only
+    # rejects the panel case (a bare 500, no detail) - the others are
+    # accepted on the wire. They are still rejected here, because a
+    # document the API swallows is not the same as one the editor can
+    # represent: an accepted-but-malformed document gets silently repaired
+    # or mangled on the next human edit, which is worse than a rejection.
+
+    def test_bare_text_in_a_list_item_is_rejected(self):
+        # <li>hello</li> - the most natural list HTML anyone writes, and it
+        # was reaching the tree straight through handle_data with no check
+        # at all before this fix.
+        self._rejects("<ul><li>hello</li></ul>", "listItem")
+
+    def test_a_rule_cannot_sit_directly_in_a_list_item(self):
+        # <hr> was appended straight to content, bypassing _check_nesting -
+        # so FORBIDDEN_CHILDREN["listItem"] already named "rule" but the
+        # rule could never actually fire.
+        self._rejects("<ul><li><hr></li></ul>", "rule", "listItem")
+
+    def test_a_rule_cannot_sit_directly_in_a_heading(self):
+        self._rejects("<h2><hr></h2>", "rule", "heading")
+
+    def test_status_cannot_sit_in_a_code_block(self):
+        # A status lozenge is legal inline content in a heading or a task
+        # item, but a codeBlock takes plain text only - not even the other
+        # inline nodes a heading can hold - so it needs its own check
+        # (TEXT_ONLY), not just BLOCK_TYPES membership.
+        self._rejects(
+            '<pre><span data-type="status" data-color="green">x</span></pre>',
+            "status", "codeBlock",
+        )
+
+    # -- Finding B: a block or embed card was silently relocated to the
+    # document root instead of staying where its author put it. Silently
+    # moving content is worse than refusing it.
+
+    def test_a_block_card_is_appended_to_its_actual_parent_not_the_document_root(self):
+        doc = html_to_adf(
+            '<div data-type="panel-info"><p>x</p>'
+            '<a href="https://example.com" data-card-appearance="block"></a>'
+            "</div>"
+        )
+        self.assertEqual(len(doc["content"]), 1)
+        panel = doc["content"][0]
+        self.assertEqual(panel["type"], "panel")
+        self.assertEqual(panel["content"][1]["type"], "blockCard")
+
+    def test_an_embed_card_cannot_sit_directly_in_a_panel(self):
+        # Now that the card is checked in place rather than relocated to
+        # the root first, panel's existing "embedCard" forbidden entry can
+        # actually fire.
+        self._rejects(
+            '<div data-type="panel-info"><p>x</p>'
+            '<a href="https://example.com" data-card-appearance="embed"></a>'
+            "</div>",
+            "embedCard", "panel",
+        )
+
+    # -- Finding C: blockquote's forbidden set was too narrow. ADF
+    # blockquote content is paragraphs, lists and code blocks only.
+
+    def test_blockquote_cannot_hold_a_heading(self):
+        self._rejects("<blockquote><h2>no</h2></blockquote>", "heading", "blockquote")
+
+    def test_blockquote_cannot_hold_a_table(self):
+        self._rejects(
+            "<blockquote><table><tbody><tr><td><p>x</p></td></tr></tbody>"
+            "</table></blockquote>",
+            "table", "blockquote",
+        )
+
+    def test_blockquote_cannot_hold_a_panel(self):
+        self._rejects(
+            '<blockquote><div data-type="panel-info"><p>x</p></div></blockquote>',
+            "panel", "blockquote",
+        )
+
+    def test_blockquote_cannot_hold_an_expand(self):
+        self._rejects(
+            "<blockquote><details><summary>s</summary><p>x</p></details>"
+            "</blockquote>",
+            "expand", "blockquote",
+        )
+
+    def test_blockquote_cannot_hold_a_layout_section(self):
+        self._rejects(
+            "<blockquote>"
+            '<section data-type="layout-two-equal">'
+            '<div data-type="column"><p>L</p></div>'
+            '<div data-type="column"><p>R</p></div>'
+            "</section></blockquote>",
+            "layoutSection", "blockquote",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

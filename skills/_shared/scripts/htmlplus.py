@@ -59,6 +59,16 @@ SIMPLE_BLOCKS = {
     "blockquote": "blockquote",
 }
 
+# A sentinel for FORBIDDEN_CHILDREN entries whose content model is plain
+# text and nothing else - not even the other inline nodes (status, date, a
+# link card) that a heading or a task item can legally hold. codeBlock is
+# the only one: real ADF code blocks carry marks-free text, full stop. It
+# is kept distinct from the shared "inline content only" None entries below
+# rather than folded into their BLOCK_TYPES check, because that check does
+# not treat status/date/card children as a violation, and inside a
+# codeBlock they are one.
+TEXT_ONLY = "text-only"
+
 # What each container cannot directly contain, keyed by ADF node type.
 # Straight from the nesting table in references/html-patterns.md, which is in
 # turn ADF's own rules. Confluence rejects a violation with a descriptive
@@ -71,13 +81,16 @@ FORBIDDEN_CHILDREN = {
     "expand": {"expand", "layoutSection", "bodiedExtension"},
     "tableCell": {"table", "layoutSection", "bodiedExtension"},
     "tableHeader": {"table", "layoutSection", "bodiedExtension"},
-    "blockquote": {"blockquote"},
+    # ADF blockquote content is paragraphs, lists and code blocks only -
+    # not headings, tables, panels, expands or layout sections either.
+    "blockquote": {"blockquote", "heading", "table", "panel", "expand",
+                   "layoutSection"},
     "table": {"table"},
     # Inline-content-only containers: any block child at all is a violation.
     "taskItem": None,
     "decisionItem": None,
     "heading": None,
-    "codeBlock": None,
+    "codeBlock": TEXT_ONLY,
 }
 
 # Every block node type this converter emits. Used for the inline-only check.
@@ -87,6 +100,25 @@ BLOCK_TYPES = {
     "taskList", "taskItem", "decisionList", "decisionItem", "codeBlock",
     "layoutSection", "layoutColumn", "rule", "blockCard", "embedCard",
 }
+
+# Containers whose ADF content model is blocks only - a bare text node sitting
+# straight inside one of these is invalid, even though the parser is happy to
+# hand it over. Confluence's own v2 API only rejects this for panel, and does
+# so with a bare 500 and a null detail; the rest fail just as surely, only
+# without telling anyone - the editor cannot represent bare text there and
+# silently repairs or mangles it on the next human edit.
+BLOCK_ONLY_PARENTS = {"listItem", "tableCell", "tableHeader", "panel",
+                       "blockquote"}
+
+
+def a_or_an(word):
+    """"a" or "an" before word, by the crude vowel-sound test.
+
+    Good enough for the ADF node type names this converter ever puts in an
+    error message - real words, not abbreviations that read differently
+    ("an SQL", "a UUID") which the sound test would get wrong.
+    """
+    return "an" if word[:1].lower() in "aeiou" else "a"
 
 
 class ConversionError(Exception):
@@ -141,6 +173,21 @@ class _Builder(HTMLParser):
         self.blocks[-1]["content"].append(node)
         self.blocks.append(node)
 
+    def _append(self, node):
+        """Append a leaf node - no children, no stack push - after checking
+        it against the currently open ancestors.
+
+        Everything that opens and stays open goes through _open, which pushes
+        onto the block stack and so gets checked there. A leaf - plain text,
+        a rule, a status lozenge, a date, a link card - never gets pushed,
+        but it still needs to clear the same nesting rules a block does, or
+        it walks straight past the validator this whole task exists to add:
+        a <li>hello</li> or an <h2><hr></h2> would otherwise never reach
+        _check_nesting at all.
+        """
+        self._check_nesting(node["type"])
+        self.blocks[-1]["content"].append(node)
+
     def _check_nesting(self, child_type):
         """Reject an invalid parent/child pair, naming both.
 
@@ -163,16 +210,27 @@ class _Builder(HTMLParser):
             if forbidden is None:
                 if child_type in BLOCK_TYPES:
                     raise ConversionError(
-                        f"A {parent_type} takes inline content only, so it "
-                        f"cannot contain a {child_type}. Close the "
+                        f"{a_or_an(parent_type).capitalize()} {parent_type} "
+                        f"takes inline content only, so it cannot contain "
+                        f"{a_or_an(child_type)} {child_type}. Close the "
+                        f"{parent_type} and put the {child_type} after it."
+                    )
+                continue
+            if forbidden is TEXT_ONLY:
+                if child_type != "text":
+                    raise ConversionError(
+                        f"{a_or_an(parent_type).capitalize()} {parent_type} "
+                        f"takes plain text only, so it cannot contain "
+                        f"{a_or_an(child_type)} {child_type}. Close the "
                         f"{parent_type} and put the {child_type} after it."
                     )
                 continue
             if child_type in forbidden:
                 raise ConversionError(
-                    f"A {parent_type} cannot contain a {child_type}. Close "
-                    f"the {parent_type} and put the {child_type} after it as "
-                    f"a sibling."
+                    f"{a_or_an(parent_type).capitalize()} {parent_type} "
+                    f"cannot contain {a_or_an(child_type)} {child_type}. "
+                    f"Close the {parent_type} and put the {child_type} "
+                    f"after it as a sibling."
                 )
 
     def _close(self):
@@ -265,7 +323,7 @@ class _Builder(HTMLParser):
                 "type": "status",
                 "attrs": {"text": "", "color": colour},
             }
-            self.blocks[-1]["content"].append(self._pending_status)
+            self._append(self._pending_status)
 
         elif tag == "ul" and dtype == "task-list":
             self._open({"type": "taskList", "attrs": {"localId": ""}})
@@ -304,7 +362,7 @@ class _Builder(HTMLParser):
             self._open({"type": "codeBlock", "attrs": {"language": "plaintext"}})
 
         elif tag == "time":
-            self.blocks[-1]["content"].append({
+            self._append({
                 "type": "date",
                 "attrs": {"timestamp": _date_to_timestamp(a.get("datetime", ""))},
             })
@@ -319,11 +377,12 @@ class _Builder(HTMLParser):
                         f'data-card-appearance="{appearance}" is not a card. '
                         f"Use inline, block or embed."
                     )
+                # Appended to the currently open block, whatever it is - not
+                # forced to the document root. A card left where its author
+                # put it is what _check_nesting can actually rule on; moving
+                # it to the root silently relocates their content instead.
                 node = {"type": CARD_TYPES[appearance], "attrs": {"url": href}}
-                if appearance == "inline":
-                    self.blocks[-1]["content"].append(node)
-                else:
-                    self.doc["content"].append(node)
+                self._append(node)
                 self._in_card = True
             else:
                 self.marks.append({"type": "link", "attrs": {"href": href}})
@@ -337,7 +396,7 @@ class _Builder(HTMLParser):
             self._open({"type": "layoutColumn", "attrs": {"width": width}})
 
         elif tag == "hr":
-            self.blocks[-1]["content"].append({"type": "rule"})
+            self._append({"type": "rule"})
 
         elif tag in SIMPLE_BLOCKS:
             self._open({"type": SIMPLE_BLOCKS[tag]})
@@ -479,11 +538,18 @@ class _Builder(HTMLParser):
                 f"Loose text outside any block: {data.strip()[:40]!r}. "
                 f"Wrap it in a <p>."
             )
+        parent_type = self.blocks[-1].get("type")
+        if parent_type in BLOCK_ONLY_PARENTS:
+            raise ConversionError(
+                f"{a_or_an(parent_type).capitalize()} {parent_type} takes "
+                f"block content only, so it cannot hold bare text: "
+                f"{data.strip()[:40]!r}. Wrap it in a <p>."
+            )
         node = {"type": "text", "text": data}
         marks = self._current_marks()
         if marks:
             node["marks"] = marks
-        self.blocks[-1]["content"].append(node)
+        self._append(node)
 
 
 def html_to_adf(fragment):
