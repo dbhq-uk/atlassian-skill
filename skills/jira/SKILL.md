@@ -11,7 +11,7 @@ This skill **creates and reads only**. It has no delete, no bulk transition, and
 
 ## Prerequisites
 
-- Credentials in `~/.jira/config.json` — run setup if absent
+- Credentials in `~/.jira/config.json` - run setup if absent
 - `jq` and `curl`
 
 ## Setup
@@ -24,7 +24,7 @@ It asks for the site URL, the account email, and an API token from <https://id.a
 
 ## Look before you create
 
-A create call fails when the project key, the issue type name, or a required field is wrong. Check first — it costs one call and saves a confusing 400.
+A create call fails when the project key, the issue type name, or a required field is wrong. Check first - it costs one call and saves a confusing 400.
 
 ```bash
 ${CLAUDE_SKILL_DIR}/scripts/jira-meta.sh projects [search]      # project keys
@@ -34,7 +34,7 @@ ${CLAUDE_SKILL_DIR}/scripts/jira-meta.sh priorities             # valid priority
 ${CLAUDE_SKILL_DIR}/scripts/jira-meta.sh whoami                 # who the token authenticates as
 ```
 
-Issue type names are per-project and case-sensitive on the wire. `Task` in one project may be `Story` or `Work Item` in another — read `types` rather than assuming.
+Issue type names are per-project and case-sensitive on the wire. `Task` in one project may be `Story` or `Work Item` in another - read `types` rather than assuming.
 
 ## Creating issues
 
@@ -60,7 +60,7 @@ ${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh bulk <PROJECT> tickets.json [--dry-ru
 ]
 ```
 
-Only `summary` is required; `type` defaults to `Task`. Blank lines in a description become separate paragraphs — REST v3 needs Atlassian Document Format, and the script builds it, so pass plain text.
+Only `summary` is required; `type` defaults to `Task`. Blank lines in a description become separate paragraphs - REST v3 needs Atlassian Document Format, and the script builds it, so pass plain text.
 
 **Use `--dry-run` first on anything bulk.** It prints the exact payload and sends nothing.
 
@@ -72,13 +72,13 @@ Every summary and every description is written in **Simplified Technical English
 
 The shape of an issue:
 
-- **Summary** — one line, in the imperative or as a noun phrase. It names the thing and the scope: `Open TCP port 1433 from the DevOps agent pool subnet to the private endpoint subnet`. A change reference in parentheses at the end is permitted.
-- **First paragraph** — what this issue is, in one or two sentences. A reader who stops here knows why the ticket exists.
-- **The request, or what happened** — the specific action, with the values a person needs to do it.
-- **Why** — the reason and the evidence, with the date you measured it.
-- **Scope and limits** — what the issue does not cover.
-- **The trigger to close it** — for anything temporary, what event ends it, named as a ticket or a date rather than as an intention.
-- **References** — the documents and the related issue keys.
+- **Summary** - one line, in the imperative or as a noun phrase. It names the thing and the scope: `Open TCP port 1433 from the DevOps agent pool subnet to the private endpoint subnet`. A change reference in parentheses at the end is permitted.
+- **First paragraph** - what this issue is, in one or two sentences. A reader who stops here knows why the ticket exists.
+- **The request, or what happened** - the specific action, with the values a person needs to do it.
+- **Why** - the reason and the evidence, with the date you measured it.
+- **Scope and limits** - what the issue does not cover.
+- **The trigger to close it** - for anything temporary, what event ends it, named as a ticket or a date rather than as an intention.
+- **References** - the documents and the related issue keys.
 
 Drop a heading that has nothing to say. Do not write a heading and then repeat the summary under it.
 
@@ -101,7 +101,7 @@ ${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh mine [max]
 3. **Two or more issues means `bulk` with `--dry-run` first**, reviewed, then the real run.
 4. Do not put credentials, tokens, account numbers, or personal data into an issue description. A Jira issue is not a secret store, and in a regulated environment it is disclosable.
 5. On failure, read the `Cause:` and `Fix:` lines the scripts print. They carry Jira's own error text.
-6. **Write the summary and the description in Simplified Technical English** — see [§ Writing the issue text](#writing-the-issue-text) and [references/ste.md](references/ste.md).
+6. **Write the summary and the description in Simplified Technical English** - see [§ Writing the issue text](#writing-the-issue-text) and [references/ste.md](references/ste.md).
 
 ## Limits
 
@@ -109,4 +109,4 @@ Jira Cloud allows roughly 60 authenticated requests a minute. `bulk` paces itsel
 
 ## Credentials
 
-`~/.jira/config.json`, mode 600, holding `site`, `email` and `token`. The token never reaches a command line — `curl` reads it from a 0600 config file, so it does not appear in `ps` or in shell history.
+`~/.jira/config.json`, mode 600, holding `site`, `email` and `token`. The token never reaches a command line - `curl` reads it from a 0600 config file, so it does not appear in `ps` or in shell history.

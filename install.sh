@@ -1,34 +1,37 @@
 #!/bin/bash
-# Install the Jira skill into ~/.claude/skills/ as a live symlink install.
+# Install the jira skill into ~/.claude/skills/ as a live symlink.
 #
-# SKILL.md references scripts via ${CLAUDE_SKILL_DIR}, which Claude Code
+# A SKILL.md references its scripts via ${CLAUDE_SKILL_DIR}, which Claude Code
 # substitutes to the skill's own directory for personal, project, and plugin
 # installs alike. So this script symlinks the whole skill directory into
 # ~/.claude/skills/ - every edit (scripts AND SKILL.md) is immediately live,
-# with no per-file rewrite. Re-run only when you add a new skill directory.
+# with no per-file rewrite.
+#
+# It does not run the setup for you. Launching an interactive credential prompt
+# from an installer is surprising - the setup command is printed at the end.
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILLS_ROOT="$HOME/.claude/skills"
 
-echo "=== Jira skill installer (Claude Code) ==="
+echo "=== jira installer (Claude Code) ==="
 echo
 
 # --- Dependencies ---
+# A warning, not a failure: a missing tool blocks a call to Jira, not the install.
 MISSING=""
 command -v jq >/dev/null 2>&1   || MISSING="$MISSING jq"
 command -v curl >/dev/null 2>&1 || MISSING="$MISSING curl"
 if [ -n "$MISSING" ]; then
-  echo "Missing required dependencies:$MISSING"
-  echo "  macOS:  brew install$MISSING"
-  echo "  Ubuntu: sudo apt install$MISSING"
-  exit 1
+  echo "Missing:$MISSING"
+  echo "The skill installs anyway, but it cannot call Jira until they are there."
+else
+  echo "Dependencies OK."
 fi
-echo "Dependencies OK."
 echo
 
-# --- Install each skill in this pack as a full-directory symlink ---
+# --- Install the skill as a full-directory symlink ---
 mkdir -p "$SKILLS_ROOT"
 for src in "$SCRIPT_DIR"/skills/*/; do
   src="${src%/}"
@@ -41,22 +44,18 @@ for src in "$SCRIPT_DIR"/skills/*/; do
 done
 
 echo
-echo "Installed as a directory symlink - all edits (scripts and SKILL.md) are live."
-echo
+echo "Installed as directory symlinks - all edits (scripts and SKILL.md) are live."
 
-# --- Setup / credentials ---
-if [ -f "$HOME/.jira/config.json" ]; then
-  echo "Existing Jira credentials found. Re-run setup any time with:"
-  echo "  $SKILLS_ROOT/jira/scripts/jira-setup.sh"
-elif [ -t 0 ]; then
-  echo "No credentials found. Launching setup..."
+# --- Setup script ---
+SETUPS="$(find "$SCRIPT_DIR"/skills -type f -name '*-setup.sh' | sort)"
+if [ -n "$SETUPS" ]; then
   echo
-  "$SKILLS_ROOT/jira/scripts/jira-setup.sh" || echo "Setup skipped; run jira-setup.sh when ready."
-else
-  # Not a terminal - jira-setup.sh prompts, so never launch it here.
-  echo "No credentials found. Run setup when you are at a terminal:"
-  echo "  $SKILLS_ROOT/jira/scripts/jira-setup.sh"
+  echo "This skill needs credentials before first use:"
+  while IFS= read -r setup; do
+    name="$(basename "$(dirname "$(dirname "$setup")")")"
+    echo "  $name:  $SKILLS_ROOT/$name/scripts/$(basename "$setup")"
+  done <<< "$SETUPS"
 fi
 
 echo
-echo "Done. Try: 'what Jira projects can I see' or 'raise a ticket in PAY'"
+echo "Done. Try: 'what Jira projects can I see'"
