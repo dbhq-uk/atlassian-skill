@@ -1,21 +1,24 @@
 {
-  "name": "jira",
-  "description": "A Jira skill for Claude Code - create issues one at a time or in bulk, look up projects, issue types and required fields before you create, and read issues back with JQL. Via the Jira Cloud REST API v3 and an API token. Create and read only: no delete, no bulk transition.",
-  "version": "1.0.0",
+  "name": "atlassian",
+  "description": "Jira and Confluence from your agent, over the REST API with an API token and no MCP server. Create and read Jira issues; search, read, create and update Confluence pages; publish a repository's markdown to a space. Bodies are authored as Confluence HTML+ and converted to ADF locally, so panels, status lozenges and task lists survive. Create and read only: no delete.",
+  "version": "2.0.0",
   "author": {
     "name": "DBHQ",
     "email": "dan@dbhq.uk"
   },
   "homepage": "https://dbhq.uk",
-  "repository": "https://github.com/dbhq-uk/jira-skill",
+  "repository": "https://github.com/dbhq-uk/atlassian-skill",
   "license": "MIT",
   "keywords": [
     "jira",
+    "confluence",
     "atlassian",
+    "adf",
     "issue-tracking",
-    "tickets",
+    "wiki",
+    "documentation",
     "jql",
-    "rest-api",
-    "productivity"
+    "cql",
+    "rest-api"
   ]
 }

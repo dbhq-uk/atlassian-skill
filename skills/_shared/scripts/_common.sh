@@ -6,33 +6,41 @@
 # credentials and the method from a 0600 config file, so the token is not
 # visible in `ps`, in shell history, or in any process listing.
 
-# Settings live under ~/.dbhq/<skill>/, which is the house rule for every DBHQ
-# skill: one directory per skill, never a new top-level dotfile in $HOME. This
-# was ~/.jira until 17 Sep 2026.
+# Settings live under ~/.dbhq/<skill-family>/, which is the house rule for every
+# DBHQ skill. This was ~/.jira until 17 Sep 2026, then ~/.dbhq/jira, and it is
+# ~/.dbhq/atlassian from the point jira and confluence started sharing it - one
+# Atlassian Cloud token authenticates both products on the same site.
 #
-# The move happens here, on first run, guarded on the new directory not
-# existing - so an existing install keeps working and nobody has to be told to
-# move a file. mv preserves the 600 mode on config.json.
-CONFIG_DIR="$HOME/.dbhq/jira"
+# Both moves happen here, on first run, each guarded on the new directory not
+# existing. An install that has never been upgraded moves twice, ~/.jira to
+# ~/.dbhq/jira to ~/.dbhq/atlassian, and that is correct. mv preserves the 600
+# mode on config.json.
+CONFIG_DIR="$HOME/.dbhq/atlassian"
 CONFIG_FILE="$CONFIG_DIR/config.json"
-LEGACY_DIR="$HOME/.jira"
 
-jira_migrate_legacy_config() {
+atlassian_migrate_legacy_config() {
     [ -d "$CONFIG_DIR" ] && return 0
-    [ -d "$LEGACY_DIR" ] || return 0
     mkdir -p "$HOME/.dbhq"
     chmod 700 "$HOME/.dbhq" 2>/dev/null || true
-    mv "$LEGACY_DIR" "$CONFIG_DIR"
+    local from=""
+    if [ -d "$HOME/.dbhq/jira" ]; then
+        from="$HOME/.dbhq/jira"
+    elif [ -d "$HOME/.jira" ]; then
+        from="$HOME/.jira"
+    else
+        return 0
+    fi
+    mv "$from" "$CONFIG_DIR"
     chmod 700 "$CONFIG_DIR" 2>/dev/null || true
-    echo "Moved Jira credentials from $LEGACY_DIR to $CONFIG_DIR." >&2
+    echo "Moved Atlassian credentials from $from to $CONFIG_DIR." >&2
 }
 
-jira_migrate_legacy_config
+atlassian_migrate_legacy_config
 
 require_config() {
     if [ ! -f "$CONFIG_FILE" ]; then
         echo "Error: no credentials. Cause: $CONFIG_FILE does not exist." >&2
-        echo "Fix: run jira-setup.sh" >&2
+        echo "Fix: run atlassian-setup.sh" >&2
         exit 1
     fi
     SITE=$(jq -r '.site // empty' "$CONFIG_FILE")
@@ -40,7 +48,7 @@ require_config() {
     TOKEN=$(jq -r '.token // empty' "$CONFIG_FILE")
     if [ -z "$SITE" ] || [ -z "$EMAIL" ] || [ -z "$TOKEN" ]; then
         echo "Error: $CONFIG_FILE is missing site, email or token." >&2
-        echo "Fix: re-run jira-setup.sh" >&2
+        echo "Fix: re-run atlassian-setup.sh" >&2
         exit 1
     fi
 }
@@ -109,7 +117,7 @@ api_fail() {
         echo "Cause: $(printf '%s' "$response" | head -c 300)" >&2
     fi
     case "$API_STATUS" in
-        401) echo "Fix: the email or token is wrong. Re-run jira-setup.sh." >&2 ;;
+        401) echo "Fix: the email or token is wrong. Re-run atlassian-setup.sh." >&2 ;;
         403) echo "Fix: your account lacks permission for this project." >&2 ;;
         404) echo "Fix: check the project key or issue key exists and is visible to you." >&2 ;;
         429) echo "Fix: rate limited (60 requests/minute). Wait a minute and retry." >&2 ;;

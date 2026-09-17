@@ -3,8 +3,9 @@
 # Read-only. Run these before creating an issue so the payload is right first time.
 
 set -e
-# shellcheck source=_common.sh
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../_shared/scripts/_common.sh
+. "$SCRIPT_DIR/../../_shared/scripts/_common.sh"
 require_config
 
 usage() {
