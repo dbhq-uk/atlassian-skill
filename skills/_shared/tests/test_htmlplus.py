@@ -678,6 +678,15 @@ ROUND_TRIP_CASES = [
     # reversed on every pass.
     "<p><strong><em>both</em></strong></p>",
     '<p><a href="https://example.com/x"><strong>link</strong></a></p>',
+    # Finding 4 (review, Task 7): html_to_adf had no <br> branch at all, so
+    # a page containing a hard break (shift-enter in the Confluence editor)
+    # could not be converted back to ADF after a round trip through
+    # adf_to_html, which does emit <br> for a hardBreak node.
+    "<p>line one<br>line two</p>",
+    # Finding 5 (review, Task 7): the old blanket "if not data.strip():
+    # return" at the top of handle_data ate the space between two marked
+    # runs, not just inter-tag formatting whitespace.
+    "<p><strong>a</strong> <em>b</em></p>",
 ]
 
 
@@ -704,6 +713,44 @@ class TestRoundTrip(unittest.TestCase):
         # rather than a bare ADF inequality.
         doc = html_to_adf("<p><strong><em>both</em></strong></p>")
         self.assertEqual(adf_to_html(doc), "<p><strong><em>both</em></strong></p>")
+
+    def test_hard_break_converts_to_adf(self):
+        # Finding 4 (review, Task 7): html_to_adf had no <br> branch, so a
+        # page containing a hard break could be fetched and rendered to
+        # HTML+ but never converted back - splicing a change and
+        # re-converting raised "<br> is not a known HTML+ element" on the
+        # very markup adf_to_html had just produced.
+        doc = html_to_adf("<p>line one<br>line two</p>")
+        content = doc["content"][0]["content"]
+        self.assertEqual(
+            [n["type"] for n in content], ["text", "hardBreak", "text"]
+        )
+
+    def test_space_between_two_marked_runs_survives(self):
+        # Finding 5 (review, Task 7): a lone space between two inline
+        # elements is genuine content in a paragraph, not the inter-tag
+        # formatting whitespace the same guard correctly discards at the
+        # document root or inside a block-only container.
+        doc = html_to_adf("<p><strong>a</strong> <em>b</em></p>")
+        texts = [n["text"] for n in doc["content"][0]["content"]]
+        self.assertEqual(texts, ["a", " ", "b"])
+
+    def test_whitespace_between_list_items_still_vanishes(self):
+        # Guard against the false negative the review explicitly warned
+        # against when widening BLOCK_ONLY_PARENTS to fix Finding 5: once
+        # a </li> closes, the open block is the list itself (bulletList,
+        # orderedList, taskList or decisionList - not listItem, which
+        # already popped), so the same whitespace-discard rule has to
+        # reach the list container too, or formatting indentation between
+        # items would be kept as a stray text node.
+        with_whitespace = html_to_adf(
+            "<ul>\n  <li><p>one</p></li>\n  <li><p>two</p></li>\n</ul>"
+        )
+        without_whitespace = html_to_adf(
+            "<ul><li><p>one</p></li><li><p>two</p></li></ul>"
+        )
+        self.assertEqual(with_whitespace, without_whitespace)
+        self.assertEqual(len(with_whitespace["content"][0]["content"]), 2)
 
 
 class TestUnsupportedAdfNode(unittest.TestCase):

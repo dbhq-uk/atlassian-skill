@@ -115,8 +115,28 @@ BLOCK_TYPES = {
 # so with a bare 500 and a null detail; the rest fail just as surely, only
 # without telling anyone - the editor cannot represent bare text there and
 # silently repairs or mangles it on the next human edit.
+#
+# Task 7 widened this from the original five (listItem, tableCell,
+# tableHeader, panel, blockquote) to every other container whose content
+# model is exactly one kind of block child and nothing else - taskList
+# (taskItem+), decisionList (decisionItem+), bulletList/orderedList
+# (listItem+), table (tableRow+), tableRow (tableCell|tableHeader+),
+# layoutSection (layoutColumn+), layoutColumn (block+) and expand (block+
+# past its title). codeBlock is deliberately not here even though it looks
+# block-only shaped: its content model is plain text, not blocks, so it
+# needs the opposite treatment and handle_data never checks it against
+# this set.
+#
+# This set now does double duty: handle_data also reads it to decide
+# whether whitespace-only text is inter-tag formatting to discard, or
+# content to keep. Without the wider set, the newline between two <li>
+# (parent bulletList at that point, not listItem, which already closed)
+# would have been kept as a stray text node - the very regression the
+# fix for the mark-order space-eating bug had to avoid reintroducing.
 BLOCK_ONLY_PARENTS = {"listItem", "tableCell", "tableHeader", "panel",
-                       "blockquote"}
+                      "blockquote", "taskList", "decisionList",
+                      "bulletList", "orderedList", "table", "tableRow",
+                      "layoutSection", "layoutColumn", "expand"}
 
 
 def a_or_an(word):
@@ -309,6 +329,17 @@ class _Builder(HTMLParser):
             if tag in ("sub", "sup"):
                 mark["attrs"] = {"type": tag}
             self.marks.append(mark)
+
+        elif tag == "br":
+            # A hard break - what shift-enter produces in the Confluence
+            # editor, so a genuinely common element on a real page, not an
+            # edge case. adf_to_html already emits <br> for a hardBreak
+            # node; without this branch the reverse direction had no way
+            # back in, so any fetched page containing one became
+            # uneditable through this skill - splicing a change and
+            # converting back to ADF would reject the very HTML+ the
+            # converter itself had just produced.
+            self._append({"type": "hardBreak"})
 
         elif tag == "div" and dtype.startswith("panel-"):
             kind = dtype[len("panel-"):]
@@ -523,8 +554,6 @@ class _Builder(HTMLParser):
             self._close()
 
     def handle_data(self, data):
-        if not data.strip():
-            return
         if self._in_card:
             # A smart link renders its anchor text from the target, so any
             # text inside the element is discarded rather than emitted.
@@ -533,26 +562,51 @@ class _Builder(HTMLParser):
             return
         if self._pending_status is not None:
             # Accumulate every run rather than overwriting, so inline markup
-            # inside the status (e.g. an <em>) does not drop the runs either
-            # side of it. Stripped once when the <span> closes.
+            # inside the status (e.g. an <em>) does not drop the runs, or the
+            # space between two of them, either side of it. Checked ahead of
+            # the whitespace-only guard below rather than after it, or a
+            # lone space between two marked runs inside the status would be
+            # silently eaten before ever reaching this accumulation. Stripped
+            # once when the <span> closes.
             self._pending_status["attrs"]["text"] += data
             return
         if self._in_summary:
-            # Same accumulate-then-strip as status, above.
+            # Same accumulate-then-strip as status, above - and checked
+            # ahead of the whitespace guard for the same reason.
             self.blocks[-1]["attrs"]["title"] += data
             return
         if self.blocks[-1] is self.doc:
+            if not data.strip():
+                # Whitespace between top-level blocks - formatting, not
+                # content.
+                return
             raise ConversionError(
                 f"Loose text outside any block: {data.strip()[:40]!r}. "
                 f"Wrap it in a <p>."
             )
         parent_type = self.blocks[-1].get("type")
         if parent_type in BLOCK_ONLY_PARENTS:
+            if not data.strip():
+                # Whitespace between block siblings inside a block-only
+                # container - the newline between two <li>, <tr>, <td> or
+                # <div data-type="column"> elements, say - is formatting
+                # the same way it is at the document root, and has to
+                # vanish the same way: keeping it would append a stray
+                # text node straight into a container whose ADF content
+                # model has no room for one.
+                return
             raise ConversionError(
                 f"{a_or_an(parent_type).capitalize()} {parent_type} takes "
                 f"block content only, so it cannot hold bare text: "
                 f"{data.strip()[:40]!r}. Wrap it in a <p>."
             )
+        # Every other open block already holds inline content directly - a
+        # paragraph, heading, task item, decision item or code block - so
+        # whitespace here is not formatting, it is content: the gap between
+        # "<strong>a</strong>" and "<em>b</em>" that keeps the two words
+        # apart. Dropping it (the pre-Task-7-review behaviour, via a blanket
+        # "if not data.strip(): return" at the top of this method) ran them
+        # together on write-back.
         node = {"type": "text", "text": data}
         marks = self._current_marks()
         if marks:
