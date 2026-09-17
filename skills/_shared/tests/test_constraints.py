@@ -46,8 +46,11 @@ EM_DASH = chr(0x2014)
 EN_DASH = chr(0x2013)
 
 # .github/workflows/validate.yml legitimately embeds a literal em dash as the
-# search pattern its own em-dash-detection CI step greps for ($'—',
-# bash ANSI-C-quoted). That is not a violation of the "no em dash" rule; it
+# search pattern its own em-dash-detection CI step greps for (an
+# ANSI-C-quoted $'...' holding U+2014 - written as a codepoint here
+# rather than as the character, because the CI step below greps THIS
+# file too and a comment about the rule is not an exemption from it).
+# That is not a violation of the "no em dash" rule; it
 # is the tool that enforces the rule elsewhere needing the character it is
 # looking for. It is excluded from the em-dash assertion only, below, and
 # nowhere else: it still goes through TestNothingClientSpecific like every
