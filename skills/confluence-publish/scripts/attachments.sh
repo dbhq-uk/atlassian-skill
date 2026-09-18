@@ -52,6 +52,24 @@ case "$PAGE_ID" in
 esac
 [ -f "$FILE" ] || { echo "Error: no such file: $FILE" >&2; exit 1; }
 
+# $FILE lands verbatim in a curl -K config file as `form = "file=@$FILE"`,
+# the same shape _common.sh's api() guards for PATH. A double quote or a
+# newline in the path breaks out of that quoted value and starts a new curl
+# directive on the next line - a `proxy =` line needs no slashes to work, and
+# the `user = "email:TOKEN"` line already above it in the same file applies
+# to whatever transfer the injected directive describes. Uploading a cloned
+# repo's own images is this skill's documented job, so the filename here is
+# exactly as attacker-controlled as PATH is in api() - refused the same way,
+# before the config file is ever built.
+case "$FILE" in
+    *'"'*|*$'\n'*)
+        echo "Error: refusing to upload this file." >&2
+        echo "Cause: its path contains a double quote or a newline, which can break out of the curl config file and inject a second, attacker-chosen request that still carries the site's credentials." >&2
+        echo "Fix: rename the file (or the directory holding it) to remove that character." >&2
+        exit 1
+        ;;
+esac
+
 require_config
 
 # Multipart upload cannot go through api(), which sends JSON. Same discipline
