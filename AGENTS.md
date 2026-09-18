@@ -98,10 +98,18 @@ If it does not - typically because a
 human edited the page directly in the Confluence editor and wrote something
 this converter has no HTML+ form for - the write is refused, because sending
 it would silently drop whatever does not survive the round trip, not only the
-part the caller meant to change. Measured across 289 real pages, this refuses
-roughly 60% of the time. That is expected behaviour on a page with editing
-history outside this pipeline, not a sign anything is broken, and it is not a
-bug to route around: there is no `--force` anywhere in this skill family, on
+part the caller meant to change. A live-site measurement across 289 real
+pages once found this refusing roughly 60% of the time - almost always an
+ordinary node's own attribute or mark (a local id, a colspanned cell's
+per-column widths, a list's start number) this converter dropped rather than
+carried through, not an exotic node type. Generalising the same
+carry-through-or-opaque-passthrough rule that already covered media to every
+named node type closed that gap, and the same measurement now passes
+cleanly; what still refuses is narrower - a node type or attribute this
+converter has never modelled at all, or a table a person left genuinely
+inconsistent. That is expected behaviour on a page with editing history
+outside this pipeline, not a sign anything is broken, and it is not a bug to
+route around: there is no `--force` anywhere in this skill family, on
 either script.
 
 **7. No packages, no venv, no credential in the repo.** Bash plus `curl` and

@@ -29,6 +29,12 @@ contain a table, an expand, a blockquote or another panel.
 
 Use `panel-warning` for anything that would otherwise be written in capitals.
 
+`panel-custom` is the editor's emoji-and-colour panel, on a page fetched back
+from Confluence: `data-panel-icon-id`, `data-panel-icon`, `data-panel-icon-text`
+and `data-panel-color`. Round-trip bookkeeping, the same as a media id - not
+something to invent when hand-authoring a fresh panel; use one of the five
+named colours above instead.
+
 ---
 
 ## Status lozenges
@@ -76,6 +82,18 @@ when none was sent. Like the media `data-local-id` above, this is round-trip
 bookkeeping, not something to invent when hand-authoring a new list - leave it
 off, exactly as the examples above do, and Confluence assigns its own.
 
+**`data-local-id` is not special to media and lists.** A page fetched back
+from Confluence carries one on almost every element that can hold content -
+paragraphs, headings, plain `<ul>`/`<ol>`/`<li>`, `<blockquote>`, `<hr>`,
+`<table>`/`<tr>`/`<td>`/`<th>`, panels, code blocks and expands, status
+lozenges, `<time>`, and every card. Every one of them is read back and
+preserved when splicing a change into a fetched page - see the checklist -
+and none of them is something to invent by hand.
+
+An `<ol>` also takes the plain HTML `start` attribute for a list that does not
+begin at 1 - `<ol start="5">` - unlike a local id, this one an author might
+genuinely set by hand.
+
 ---
 
 ## Expands
@@ -90,6 +108,9 @@ An expand takes almost any block content including tables and panels. It
 cannot nest inside another expand. Inside a table cell it is allowed, and
 this converter emits it as an ordinary `expand` node there too - not ADF's
 separate `nestedExpand` type, which this converter does not write.
+
+`<details>` also takes `data-local-id` and, on a fetched page,
+`data-breakout-mode` (see Code blocks above) for an expand stretched wide.
 
 Use one for anything a reader needs available but not in their way: a change
 log, a long field map, a superseded position kept for the record.
@@ -174,9 +195,16 @@ to author.
 the same value. Widths are plain numbers with no unit: `242`, never `242px`.
 Anything that is not a plain number is dropped rather than coerced.
 
+A cell spanning more than one column with `colspan` carries one width per
+spanned column, comma separated: `data-colwidth="200,400"` on a `colspan="2"`
+cell. An ordinary single-column cell keeps the plain single value above.
+
 Other table attributes: `data-layout` (`default`, `center`, `wide`,
 `full-width`), `data-number-column="true"` for automatic row numbering,
-`data-display-mode="fixed"` to lock the widths.
+`data-display-mode="fixed"` to lock the widths. A fetched page's `<table>`,
+`<tr>`, `<td>` and `<th>` also carry `data-local-id`, and a cell can carry
+`data-background` (a colour the editor's cell-shading picker set) - both
+round-trip bookkeeping-or-formatting, not something to invent by hand.
 
 Cells accept block content (paragraphs, lists, panels, nested expands), so a
 cell that needs a caveat can carry one rather than pushing it into a footnote.
@@ -247,6 +275,12 @@ Available: `layout-two-equal`, `layout-two-left-sidebar`,
 `layout-two-right-sidebar`, `layout-three-equal`, `layout-three-with-sidebars`,
 `layout-section`. The number of `column` children must match the layout.
 
+A column takes `data-width` (a percentage, no `%` sign: `66.66`) for a divider
+dragged off the even split its name suggests - omit it when hand-authoring a
+fresh layout and this converter computes an even split itself. On a fetched
+page, `<section>` can also carry `data-breakout-mode` (see Code blocks above)
+for a layout section stretched wide.
+
 ---
 
 ## Code blocks
@@ -255,9 +289,18 @@ Available: `layout-two-equal`, `layout-two-left-sidebar`,
 <pre><code class="language-json">{ "transactionId": 1 }</code></pre>
 ```
 
-Use the real language class so it highlights. `plaintext` for a bare route or a
-shell line. `<pre>` takes no other attribute - `data-wrap` is not a real one;
-this converter has no line-wrap toggle and silently drops it if written.
+Use the real language class so it highlights, or write `language-plaintext`
+for a bare route or a shell line where you want to say so explicitly. Leaving
+the class off entirely is also fine and is what a fetched page's own
+unlabelled code blocks actually look like - this converter no longer invents
+`plaintext` where the source had no language at all.
+
+`<pre>` also takes `data-local-id` (round-trip bookkeeping, as elsewhere) and,
+on a page fetched back from Confluence, `data-breakout-mode`
+(`wide`/`full-width`) with an optional `data-breakout-width` in pixels for a
+`wide` block resized past its default - the editor's own "make this wide"
+toggle. `data-wrap` is not a real attribute; this converter has no line-wrap
+toggle and silently drops it if written.
 
 ---
 

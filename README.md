@@ -134,8 +134,13 @@ whose current content this converter cannot read back unchanged (value
 equality on the parsed ADF, not a byte-identical comparison) -
 `UPDATE REPLACES THE WHOLE BODY`, so writing over content like
 that would silently drop whatever does not survive the round trip, not only
-the part you meant to change. **Measured across 289 real pages pulled from a
-live site, this refuses roughly 60% of them.**
+the part you meant to change. **A live-site measurement once found this
+refusing roughly 60% of a 289-page sample** - almost always an ordinary
+node's own attribute or mark (a local id, a colspanned cell's per-column
+widths, a list's start number, the editor's "make this wide" toggle) rather
+than an exotic node type. Generalising the carry-through-or-opaque-passthrough
+rule that already covered media to every named node type closed that gap,
+and the same measurement now passes cleanly.
 
 This is a separate guard from `--base-version`, which `update` also always
 requires: `--base-version` refuses a write if the page has moved on since
