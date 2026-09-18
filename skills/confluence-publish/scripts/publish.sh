@@ -14,12 +14,11 @@
 # page_id is written back on the first publish. No page_id means create; a
 # page_id means update that page.
 #
-# Three things the brief this was built from did not know about, all fixed
-# here rather than reproduced:
+# Three things worth knowing about this script's design, each deliberate:
 #
-# - confluence-pages.sh update now REQUIRES --base-version <n>, with no
-#   default and no inference (Task 12's stale-write guard). The file being
-#   the master does not make that guard pointless: it still catches a
+# - confluence-pages.sh update REQUIRES --base-version <n>, with no default
+#   and no inference - its stale-write guard. The file being the master does
+#   not make that guard pointless: it still catches a
 #   concurrent edit landing in the exact window between this run starting
 #   and it writing. What it changes is the REMEDY - a human editor splices
 #   their change into the newer version and retries; this script has
@@ -41,13 +40,13 @@
 #   page as it stands right now, so the refusal is not a surprise on the
 #   real run.
 #
-# - the binding was read with `sed 's/^/FM_/' | eval` in the brief. eval
-#   runs the value half of a frontmatter line as shell too, and a markdown
-#   file is exactly the kind of thing that gets cloned from somewhere else -
-#   a space value crafted as `98765"; rm -rf ~ #` would execute the moment
-#   this script read the file it was asked to publish, before it ever spoke
-#   to Confluence. Parsed with parameter expansion instead; nothing here is
-#   ever eval'd.
+# - the binding is parsed with parameter expansion, never with
+#   `sed 's/^/FM_/' | eval`. eval runs the value half of a frontmatter line
+#   as shell too, and a markdown file is exactly the kind of thing that gets
+#   cloned from somewhere else - a space value crafted as
+#   `98765"; rm -rf ~ #` would execute the moment this script read the file
+#   it was asked to publish, before it ever spoke to Confluence. Nothing
+#   here is ever eval'd.
 
 set -e
 set -o pipefail
@@ -135,12 +134,12 @@ if [ "$(printf '%s' "$BODY_ADF" | jq -r '.content | length')" = "0" ]; then
 fi
 
 # --- Title: the first <h1> the conversion emitted, else the filename ---
-# Not `grep -m1 '^# ' "$FILE"` over the raw file - the brief's version,
-# kept until review found it. That pattern also matches a YAML comment
-# inside the frontmatter block ("# a note to self") and a shell comment
-# inside a fenced code block ("# install the thing first"), both ordinary
-# shapes in a real document, and both become the page --title on every
-# subsequent update - silently renaming a live page to the wrong thing.
+# Not `grep -m1 '^# ' "$FILE"` over the raw file. That pattern also matches
+# a YAML comment inside the frontmatter block ("# a note to self") and a
+# shell comment inside a fenced code block ("# install the thing first"),
+# both ordinary shapes in a real document, and both become the page --title
+# on every subsequent update - silently renaming a live page to the wrong
+# thing.
 # md_to_htmlplus.py has already stripped the frontmatter (it reads
 # frontmatter.py's `body`, not the raw file) and tracked fences correctly
 # by the time BODY exists, so the <h1> it actually emitted is read back

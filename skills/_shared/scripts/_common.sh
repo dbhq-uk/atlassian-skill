@@ -112,8 +112,9 @@ api() {
     # TLS or proxy failure does not abort the function before the temp file
     # below is removed. A config file naming the token in plain text (as
     # `user = "email:TOKEN"`) surviving in /tmp after any such failure is
-    # itself a credential leak - proven live: the reviewer reproduced one and
-    # read it back.
+    # itself a credential leak - proven live by reproducing one and reading
+    # it back. A signal (Ctrl-C, a killed parent) needs the same care and is
+    # what the trap just above is for.
     set +e
     if [ -n "$body" ]; then
         out=$(printf '%s' "$body" | curl -K "$cfg")

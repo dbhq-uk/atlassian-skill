@@ -42,16 +42,16 @@ STATUS_COLOURS = {"neutral", "purple", "blue", "red", "yellow", "green"}
 DECISION_STATES = {"DECIDED", "UNDECIDED"}
 CARD_TYPES = {"inline": "inlineCard", "block": "blockCard", "embed": "embedCard"}
 
-# Task 11b: opaque passthrough. An ADF node or mark this converter does not
-# know by name is carried through untouched rather than refused (a block or
-# inline node) or silently dropped (a mark) - see _opaque_to_html and
+# Opaque passthrough. An ADF node or mark this converter does not know by
+# name is carried through untouched rather than refused (a block or inline
+# node) or silently dropped (a mark) - see _opaque_to_html and
 # _opaque_mark_to_html below, and the _Builder branches that read the two
 # data-type values back. Real Confluence pages carry far more node and mark
 # types than this converter has named support for (media, extension,
 # textColor, alignment, breakout and more, measured against a live site) -
 # passthrough is the floor that lets any page be read and edited around the
 # parts this converter cannot yet render, not a replacement for adding named
-# support where it is worth having (Task 14 for mediaSingle/media).
+# support where it is worth having (as it was for mediaSingle/media).
 ADF_OPAQUE = "adf-opaque"
 ADF_OPAQUE_MARK = "adf-opaque-mark"
 
@@ -106,8 +106,8 @@ FORBIDDEN_CHILDREN = {
     # to reject the block-shaped things a <p> can end up wrapping through
     # this parser, notably a block/embed card that was written nested
     # inside a paragraph rather than left as a sibling of it. mediaSingle
-    # and media joined this set in Task 14, for the same reason: a figure
-    # is a block, exactly like a table or a panel, and cannot sit inside a
+    # and media belong in this set for the same reason: a figure is a
+    # block, exactly like a table or a panel, and cannot sit inside a
     # paragraph either.
     "paragraph": {"blockCard", "embedCard", "table", "panel", "expand",
                   "layoutSection", "heading", "rule", "mediaSingle", "media"},
@@ -115,9 +115,9 @@ FORBIDDEN_CHILDREN = {
     "taskItem": None,
     "decisionItem": None,
     "heading": None,
-    # Task 14. A caption's content model is inline text only (the same
-    # shape as a heading or a task item), not the codeBlock TEXT_ONLY
-    # sentinel below it - a caption can still hold, say, a status lozenge.
+    # A caption's content model is inline text only (the same shape as a
+    # heading or a task item), not the codeBlock TEXT_ONLY sentinel below
+    # it - a caption can still hold, say, a status lozenge.
     "caption": None,
     "codeBlock": TEXT_ONLY,
 }
@@ -138,9 +138,9 @@ BLOCK_TYPES = {
 # without telling anyone - the editor cannot represent bare text there and
 # silently repairs or mangles it on the next human edit.
 #
-# Task 7 widened this from the original five (listItem, tableCell,
-# tableHeader, panel, blockquote) to every other container whose content
-# model is exactly one kind of block child and nothing else - taskList
+# Widened from the original five (listItem, tableCell, tableHeader, panel,
+# blockquote) to every other container whose content model is exactly one
+# kind of block child and nothing else - taskList
 # (taskItem+), decisionList (decisionItem+), bulletList/orderedList
 # (listItem+), table (tableRow+), tableRow (tableCell|tableHeader+),
 # layoutSection (layoutColumn+), layoutColumn (block+) and expand (block+
@@ -156,12 +156,12 @@ BLOCK_TYPES = {
 # would have been kept as a stray text node - the very regression the
 # fix for the mark-order space-eating bug had to avoid reintroducing.
 #
-# mediaSingle joined this set in Task 14, for the same reason: its content
-# is a media leaf plus an optional caption, block-only the same way a
-# listItem's is, and every real published figure this converter was
-# checked against (Task 14's live-site round-trip re-measure) is written
-# pretty-printed - a newline and indentation between <div data-type="media">
-# and <figcaption>. Without this entry that whitespace is content, not
+# mediaSingle belongs in this set for the same reason: its content is a
+# media leaf plus an optional caption, block-only the same way a listItem's
+# is, and every real published figure this converter was checked against,
+# in a live-site round-trip measurement, is written pretty-printed - a
+# newline and indentation between <div data-type="media"> and
+# <figcaption>. Without this entry that whitespace is content, not
 # formatting: it lands as a stray text node wedged between the media and
 # the caption, which is exactly the class of bug BLOCK_ONLY_PARENTS exists
 # to prevent for every other block-only container.
@@ -210,9 +210,9 @@ def _parse_float(raw, attr_name):
     whole-number rule is right for data-colwidth/colspan/rowspan/table
     width, which Confluence drops outright unless they are a plain integer
     with no unit. A mediaSingle or media dimension is different - it is
-    genuinely float-valued in ADF (measured against a live site, Task 14:
-    every real mediaSingle.width is a JSON number, and a resize in the
-    Confluence editor can leave a non-integer pixel value) - so this parses
+    genuinely float-valued in ADF, measured against a live site: every real
+    mediaSingle.width is a JSON number, and a resize in the Confluence
+    editor can leave a non-integer pixel value - so this parses
     the wider "number" shape rather than isdecimal()'s integer-only one,
     while still refusing a unit or anything else int()/float() cannot read
     with a named ConversionError rather than a raw traceback.
@@ -232,7 +232,7 @@ def _parse_plain_number(raw, attr_name):
     bare traceback, for anything int() cannot parse.
 
     Shared by data-width, data-colwidth, colspan and rowspan. Only
-    data-colwidth had this check before Task 11b; colspan and rowspan went
+    data-colwidth had this check at first; colspan and rowspan went
     straight to a bare int(a[key]) with nothing catching a malformed value,
     so "colspan=2.0" - exactly the shape a real page's own JSON float
     produces once rendered by _format_number's counterpart before this fix
@@ -326,7 +326,7 @@ class _Builder(HTMLParser):
         # INLINE_MARKS closes) when its </span> arrives - see handle_endtag.
         self._opaque_mark_stack = []
         # Tag names of currently-open media leaf elements, innermost last -
-        # the same shape as _opaque_stack and for the same reason (Task 14).
+        # the same shape as _opaque_stack and for the same reason.
         # <div data-type="media"> is a leaf: it never opens a real block, so
         # its own </div> must not fall into the generic
         # "div closes whatever _open pushed" handling in handle_endtag,
@@ -411,7 +411,7 @@ class _Builder(HTMLParser):
             # _open always sets content=[] on the way in, so every closing
             # block has the key - but a real fetched ADF document never
             # carries an empty content list on any node, checked across a
-            # 40-page live sample (Task 11b): a childless node omits the key
+            # 40-page live sample: a childless node omits the key
             # entirely rather than keeping it empty. Emitting <p></p> for an
             # empty paragraph is correct HTML+; parsing that back in with an
             # empty content=[] still attached, where the original had no
@@ -529,18 +529,18 @@ class _Builder(HTMLParser):
 
         elif tag == "ul" and dtype == "task-list":
             # localId round-trips through data-local-id when present - see
-            # the taskItem branch below for why this matters: proven live
-            # (Task 15), not assumed from the media/caption precedent
-            # alone. The key is omitted rather than defaulted to "" when
-            # absent - review finding on this task: a node authored fresh,
-            # with no data-local-id at all, used to gain attrs: {"localId":
-            # ""} anyway, which is not what the source had and fails
-            # check-roundtrip against anything that genuinely carries no
-            # localId key (a hand-authored ADF fixture; conceivably a
-            # future API response). caption below already gets this right
-            # - no attrs key at all when it has nothing to hold - and
-            # taskList has no other attrs, so the same omission applies to
-            # the whole attrs key, not just the value inside it.
+            # the taskItem branch below for why this matters: proven live,
+            # not assumed from the media/caption precedent alone. The key
+            # is omitted rather than defaulted to "" when absent - a node
+            # authored fresh, with no data-local-id at all, used to gain
+            # attrs: {"localId": ""} anyway, which is not what the source
+            # had and fails check-roundtrip against anything that
+            # genuinely carries no localId key (a hand-authored ADF
+            # fixture; conceivably a future API response). caption below
+            # already gets this right - no attrs key at all when it has
+            # nothing to hold - and taskList has no other attrs, so the
+            # same omission applies to the whole attrs key, not just the
+            # value inside it.
             node = {"type": "taskList"}
             if "data-local-id" in a:
                 node["attrs"] = {"localId": a["data-local-id"]}
@@ -549,12 +549,12 @@ class _Builder(HTMLParser):
             # Confluence assigns every taskItem a real localId on save,
             # even when the create request sent none (the enclosing
             # taskList's own localId is left empty instead - the two do
-            # not behave the same way). Hardcoding "" here, as the brief
-            # this converter came from did, meant a fetched page's taskItem
-            # could never survive check-roundtrip: html_to_adf regenerated
-            # "" in place of the id Confluence had assigned, and update's
-            # round-trip gate refused every page with a task list on it -
-            # proven live against a real site, not assumed (Task 15).
+            # not behave the same way). Hardcoding "" here, as an earlier
+            # version of this converter did, meant a fetched page's
+            # taskItem could never survive check-roundtrip: html_to_adf
+            # regenerated "" in place of the id Confluence had assigned,
+            # and update's round-trip gate refused every page with a task
+            # list on it - proven live against a real site, not assumed.
             # Unlike taskList, taskItem's attrs always exists (it holds
             # state too), so only the localId key inside it is conditional.
             attrs = {"state": "TODO"}
@@ -708,8 +708,8 @@ class _Builder(HTMLParser):
                 node_attrs["alt"] = a["data-alt"]
             # width/height/localId are optional and round-trip only - there
             # is no reason to author them by hand, but a real fetched page
-            # carries all three on nearly every media node (Task 14's
-            # live-site measurement: width and height on 222/222 sampled
+            # carries all three on nearly every media node (a live-site
+            # measurement found width and height on 222/222 sampled
             # mediaSingle images, localId on 136/232), and dropping them
             # silently would fail the round-trip gate on every one.
             if "data-width" in a:
@@ -719,16 +719,16 @@ class _Builder(HTMLParser):
             if "data-local-id" in a:
                 node_attrs["localId"] = a["data-local-id"]
             # A leaf, like hardBreak/rule/status - appended through _append
-            # (not the raw list.append the brief this came from used) so it
-            # is checked against _check_nesting like everything else that
-            # reaches the tree, and pushed onto _media_stack so its own
-            # </div> is swallowed rather than closing whatever real block
-            # happens to be open (see _media_stack's own comment).
+            # (not a raw list.append) so it is checked against
+            # _check_nesting like everything else that reaches the tree,
+            # and pushed onto _media_stack so its own </div> is swallowed
+            # rather than closing whatever real block happens to be open
+            # (see _media_stack's own comment).
             self._append({"type": "media", "attrs": node_attrs})
             self._media_stack.append(tag)
 
         elif tag == "figcaption":
-            # Task 14 live-site measurement: 19 of 35 real captions carry
+            # A live-site measurement found 19 of 35 real captions carry
             # an attrs.localId Confluence assigned; the rest carry no attrs
             # key at all. Both shapes are preserved - an omitted key here,
             # not an empty {} placeholder, matching how the rest of this
@@ -740,7 +740,7 @@ class _Builder(HTMLParser):
             self._open(node)
 
         elif tag in ("div", "span") and dtype == ADF_OPAQUE:
-            # Rule 3 (Task 11b): the nesting validator does not inspect an
+            # Rule 3: the nesting validator does not inspect an
             # opaque node's contents and does not reject it for its position
             # - it came from a real page, so it was already valid where it
             # was. Appended straight to the open block's content rather than
@@ -953,7 +953,7 @@ def html_to_adf(fragment):
     elif builder._opaque_mark_stack:
         unclosed = ADF_OPAQUE_MARK
     elif builder._media_stack:
-        # The same problem again, one level down, for Task 14's media leaf:
+        # The same problem again, one level down, for the media leaf:
         # a <div data-type="media"> never pushes onto builder.blocks either
         # (it is a leaf, like the opaque case above), so an unclosed one is
         # just as invisible to the first check, and handle_data's matching
@@ -979,7 +979,7 @@ _LAYOUT_BY_COUNT = {1: "layout-section", 2: "layout-two-equal",
                     3: "layout-three-equal"}
 
 # The inline leaf types _inline_to_html already renders by name. Read by
-# _node_to_html's own fallback (Task 11b) to tell "a known inline type
+# _node_to_html's own fallback to tell "a known inline type
 # reached in block position" - rare, arguably unreachable in a well-formed
 # tree, but the pre-existing behaviour this file already had - apart from
 # "a genuinely unrecognised type reached in block position", which now gets
@@ -988,7 +988,7 @@ _LAYOUT_BY_COUNT = {1: "layout-section", 2: "layout-two-equal",
 # opaque passthrough is supposed to preserve.
 _INLINE_LEAF_TYPES = {"text", "status", "date", "inlineCard", "hardBreak"}
 
-# The attrs keys Task 14's mediaSingle/media/caption renderers each know how
+# The attrs keys the mediaSingle/media/caption renderers each know how
 # to write out. Read by _node_to_html to decide, per node, whether named
 # rendering can represent this exact node completely - not just this node's
 # type and required fields, but every attrs key it actually carries.
@@ -1043,7 +1043,7 @@ def _encode_adf(value):
 
 
 def _opaque_to_html(node, tag="div"):
-    """An unrecognised ADF node, carried through untouched (Task 11b).
+    """An unrecognised ADF node, carried through untouched.
 
     tag is "div" for a node reached in block position - a direct child of a
     block-content list - and "span" for one reached in inline position,
@@ -1057,8 +1057,8 @@ def _opaque_to_html(node, tag="div"):
 def _format_number(value):
     """A JSON number as a plain integer string, where that is safe.
 
-    Found measuring this converter against a live Confluence instance
-    (Task 11b), unrelated to opaque passthrough itself but blocking the same
+    Found measuring this converter against a live Confluence instance,
+    unrelated to opaque passthrough itself but blocking the same
     acceptance bar: real pages return table width, column width, colspan and
     rowspan as a JSON float even for whole values (1800.0, 200.0, 2.0) -
     never what html_to_adf itself writes, since it always stores
@@ -1111,7 +1111,7 @@ def _inline_to_html(node):
                 out = f"<{tag}>{out}</{tag}>"
             else:
                 # An unrecognised mark - textColor, alignment, breakout and
-                # more, measured against a live site (Task 11b). Previously
+                # more, measured against a live site. Previously
                 # silently dropped here: none of the branches above matched,
                 # so the mark simply never got applied and the run of text
                 # lost its formatting on every fetch, with no warning. Now
@@ -1130,11 +1130,12 @@ def _inline_to_html(node):
     if t == "hardBreak":
         return "<br>"
     # Reached for any inline ADF node type this converter does not know how
-    # to render. Until Task 11b this raised: a real fetched Confluence page
-    # can carry node types this converter has no HTML+ for (media, mention,
-    # emoji, extension, nestedExpand and more, measured against a live
-    # site), and refusing rather than silently dropping the node was the
-    # right call while the only alternative was dropping it. Passthrough is
+    # to render. Earlier versions of this converter raised here: a real
+    # fetched Confluence page can carry node types this converter has no
+    # HTML+ for (media, mention, emoji, extension, nestedExpand and more,
+    # measured against a live site), and refusing rather than silently
+    # dropping the node was the right call while the only alternative was
+    # dropping it. Passthrough is
     # strictly better than both: the node is carried through untouched, so
     # reading is never refused and nothing is lost on the write-back path
     # either. Its own content is not reachable through this converter in
@@ -1283,7 +1284,7 @@ def _node_to_html(node):
         # never as a direct child of a block-content list - but this is the
         # pre-existing fallback for it, kept rather than removed.
         return _inline_to_html(node)
-    # A genuinely unrecognised type in block position - Task 11b passthrough,
+    # A genuinely unrecognised type in block position - opaque passthrough,
     # carried through untouched as an opaque <div>. Checked after
     # _INLINE_LEAF_TYPES so a known inline type never gets wrapped as opaque
     # here, and delegates to _inline_to_html's own fallback (a <span>)
@@ -1381,7 +1382,7 @@ def _node_to_md(node, depth=0):
         return "\n".join(_node_to_md(c) for c in node.get("content", []))
     if t == "media":
         # .get(), not a["id"] - this rendering never raises (see the note
-        # below), and Task 14's live-site measurement found a real media
+        # below), and a live-site measurement found a real media
         # node shape this converter has no named HTML+ for at all
         # ("external": a url, no id or collection). id first because that
         # is what an attachment actually is; url as the fallback for that
@@ -1425,8 +1426,8 @@ def adf_to_markdown(doc):
 #
 # This check (in html_to_adf_for_jira, below) runs against the tree
 # html_to_adf already returned, not against the HTML+ source text - and that
-# is what makes it safe against opaque passthrough (Task 11b) for a NODE,
-# with no extra handling. An opaque HTML+ element's data-adf is decoded by
+# is what makes it safe against opaque passthrough for a NODE, with no
+# extra handling. An opaque HTML+ element's data-adf is decoded by
 # _decode_adf before the node is ever appended to the tree (see the
 # ADF_OPAQUE branch in _Builder.handle_starttag), so a status lozenge or a
 # decision list smuggled in through
@@ -1573,16 +1574,16 @@ def check_roundtrip(doc):
 
     The write-path gate this exists for: UPDATE REPLACES THE WHOLE BODY, so
     a fetch/splice/verify update is only as safe as this converter's
-    round-trip fidelity on the page actually being replaced. Before Task
-    11b a page carrying an unrecognised node or mark simply refused to
-    convert at all - loud, but safe, since nothing was ever written. Opaque
-    passthrough lets those pages convert now; for the ones that still are
-    not identical under this comparison (a known type dropping an attr or
-    a mark this converter has no HTML+ for), that refusal has to be
-    reproduced deliberately here, or reading now succeeds where it used to
-    fail and writing silently drops whatever this converter could not
-    carry through - the exact failure Task 7 closed for an
-    outright-unsupported node, reappearing one level down for a
+    round-trip fidelity on the page actually being replaced. Before opaque
+    passthrough existed, a page carrying an unrecognised node or mark
+    simply refused to convert at all - loud, but safe, since nothing was
+    ever written. Opaque passthrough lets those pages convert now; for the
+    ones that still are not identical under this comparison (a known type
+    dropping an attr or a mark this converter has no HTML+ for), that
+    refusal has to be reproduced deliberately here, or reading now
+    succeeds where it used to fail and writing silently drops whatever
+    this converter could not carry through - the same failure closed for
+    an outright-unsupported node, reappearing one level down for a
     partially-supported one. Does not itself decide whether to write; that
     is confluence-pages.sh's call.
     """

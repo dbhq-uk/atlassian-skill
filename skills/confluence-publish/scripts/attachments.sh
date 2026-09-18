@@ -1,10 +1,11 @@
 #!/bin/bash
 # Upload a file as a Confluence page attachment and print its media identity.
 #
-# The attachment API is v1 only - there is no v2 equivalent - so this is the
-# one place the skill touches v1. It is a documented, supported endpoint; the
-# v1 retirement covers the content APIs that v2 replaced, and attachments are
-# not among them.
+# The attachment API is v1 only - there is no v2 equivalent - so this is one
+# of two places the skill touches v1 (confluence-search.sh's CQL search is
+# the other; v2 has no CQL endpoint either). Both are documented, supported
+# endpoints; the v1 retirement covers the content APIs that v2 replaced, and
+# neither attachments nor CQL search is among them.
 #
 # There is no delete. Removing an attachment is a human job in the UI.
 
@@ -30,7 +31,7 @@ Feed both into a figure:
 
 Re-uploading a file with the same name replaces it in place - same
 attachment, version incremented, no duplicate - but issues a NEW media id
-every time (proven live against a real site, Task 14: not assumed). A
+every time, proven live against a real site rather than assumed. A
 figure already on a page keeps pointing at the id it was written with, so
 re-uploading an image invalidates any figure already published from the
 old id - re-run this and splice the new id in, do not just re-run the
@@ -79,9 +80,9 @@ require_config
 # PUT, not POST: this endpoint creates on first upload and replaces the same
 # attachment (same attachment id, version incremented, no duplicate) on
 # every subsequent one with the same filename - proven live against a real
-# site (Task 14), not assumed from the v1 docs, which describe POST as
-# create-only and route an update through a second, attachment-id-scoped
-# endpoint instead. PUT here does both in one call. The media id
+# site, not assumed from the v1 docs, which describe POST as create-only
+# and route an update through a second, attachment-id-scoped endpoint
+# instead. PUT here does both in one call. The media id
 # (.extensions.fileId, what a figure's data-id holds) is NOT stable across
 # a replace, though - also proven live, and the opposite of what a first
 # reading of "replaces it" would suggest - so the usage text above says so.
@@ -136,8 +137,8 @@ if [ "$STATUS" != "200" ]; then
 fi
 
 # PUT returns {results:[...]} on first upload; a straight object on a
-# replace - proven live rather than assumed (Task 14). Handle both rather
-# than picking one.
+# replace - proven live rather than assumed. Handle both rather than
+# picking one.
 MEDIA_LINE=$(printf '%s' "$BODY" | jq -r '
     (if .results then .results[0] else . end)
     | "\(.extensions.fileId // .id)\t\(.extensions.collectionName // ("contentId-" + .container.id))"')

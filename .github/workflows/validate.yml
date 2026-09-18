@@ -52,15 +52,15 @@ jobs:
           python3 -m unittest discover -s skills/confluence-publish/tests -v
 
       - name: Nothing client-specific reached this public repository
-        # test_constraints.py (Task 8) is the one place this rule lives - em
-        # dashes, a client's name, a security-proxy host, a real-looking
-        # ticket id, an IP address, a source proper noun that slipped past
-        # those shapes, plus (Task 16) the house-style write path and the
-        # ~/.dbhq/jira -> ~/.dbhq/atlassian credential move. It already ran
-        # once above as part of "Python tests"; run again here, named on its
-        # own, so a failure in this specific gate is not buried inside a
-        # 150-plus-test log - and so nobody re-adds a second copy of these
-        # patterns as a grep, which is what this step used to be.
+        # test_constraints.py is the one place this rule lives - em dashes,
+        # a client's name, a security-proxy host, a real-looking ticket id,
+        # an IP address, a source proper noun that slipped past those
+        # shapes, plus the house-style write path and the ~/.dbhq/jira ->
+        # ~/.dbhq/atlassian credential move. It already ran once above as
+        # part of "Python tests"; run again here, named on its own, so a
+        # failure in this specific gate is not buried inside a long test
+        # log - and so nobody re-adds a second copy of these patterns as a
+        # grep, which is what this step used to be.
         run: python3 -m unittest skills._shared.tests.test_constraints -v
 
       # Every .sh and .py file in the repo - install.sh, install-codex.sh and
@@ -89,11 +89,14 @@ jobs:
 
       - name: shellcheck
         # -S warning, not the default, because `info` and `style` fire on
-        # idioms these scripts use deliberately. xargs -r so a repo with no
-        # shell scripts is a pass rather than a shellcheck usage error.
+        # idioms these scripts use deliberately. -x follows the
+        # `# shellcheck source=` directives that pull in
+        # _shared/scripts/_common.sh, which shellcheck cannot check without
+        # it. xargs -r so a repo with no shell scripts is a pass rather
+        # than a shellcheck usage error.
         run: |
           find . -name '*.sh' -not -path '*/.venv/*' -print0 \
-            | xargs -0 -r shellcheck -S warning
+            | xargs -0 -r shellcheck -S warning -x
 
       - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5
         with:
