@@ -920,7 +920,7 @@ class _Builder(HTMLParser):
         # paragraph, heading, task item, decision item or code block - so
         # whitespace here is not formatting, it is content: the gap between
         # "<strong>a</strong>" and "<em>b</em>" that keeps the two words
-        # apart. Dropping it (the pre-Task-7-review behaviour, via a blanket
+        # apart. Dropping it (this method's earlier behaviour, via a blanket
         # "if not data.strip(): return" at the top of this method) ran them
         # together on write-back.
         node = {"type": "text", "text": data}

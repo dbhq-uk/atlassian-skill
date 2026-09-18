@@ -1385,7 +1385,7 @@ class TestMedia(unittest.TestCase):
         # schema-documented ADF media attribute this converter's model
         # does not cover. Before the fix, a media node carrying it
         # rendered through the named branch anyway and silently dropped
-        # the attribute - round-tripping true under the pre-Task-14 (fully
+        # the attribute - round-tripping true under the earlier (fully
         # opaque) converter and false under a named renderer that could
         # not fully represent it. It did not show up in the 289-page live
         # sample this task was measured against because none of those

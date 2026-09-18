@@ -307,6 +307,7 @@ all documented at **[skills.dbhq.uk](https://skills.dbhq.uk)**.
 | [garmin](https://skills.dbhq.uk/garmin/) | Your Garmin data, answered in the terminal |
 | [imager](https://skills.dbhq.uk/imager/) | Images from GPT Image 2, costed before it spends |
 | [gitview](https://skills.dbhq.uk/gitview/) | Which branches are finished, and safe to delete |
+| [heliograph](https://skills.dbhq.uk/heliograph/) | Change a machine you cannot log into, through an operator |
 | [pennyblack](https://skills.dbhq.uk/pennyblack/) | A physical letter, posted from the terminal |
 | [buildwork](https://skills.dbhq.uk/buildwork/) | Your open issues, run as parallel agents |
 | [deskwork](https://skills.dbhq.uk/deskwork/) | What an agent noticed, tracked as real work |
