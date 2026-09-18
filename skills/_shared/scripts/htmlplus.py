@@ -225,15 +225,22 @@ def _parse_float(raw, attr_name):
     float() cannot parse.
 
     Deliberately separate from _parse_plain_number: that helper's plain
-    whole-number rule is right for data-colwidth/colspan/rowspan/table
-    width, which Confluence drops outright unless they are a plain integer
-    with no unit. A mediaSingle or media dimension is different - it is
-    genuinely float-valued in ADF, measured against a live site: every real
-    mediaSingle.width is a JSON number, and a resize in the Confluence
-    editor can leave a non-integer pixel value - so this parses
+    whole-number rule is right for colspan/rowspan/an ordered list's start
+    number/a paragraph's indent level - counts, never genuinely fractional,
+    whoever writes them. A pixel dimension the editor itself computed is
+    different: mediaSingle/media width and height, a table's own width, a
+    table cell's colwidth, and a breakout's width are all genuinely
+    float-valued in real ADF - a live-site measurement of a
+    different, older population of real pages found column widths like
+    230.4 and 253.44, not just whole-pixel values, and every one of those
+    pages' own values had always been server-computed, never typed by an
+    author. _parse_plain_number rejecting them was this converter refusing
+    its own honest output: correctly built to catch someone hand-writing
+    242px or 50%, wrongly applied to a value nobody typed. So this parses
     the wider "number" shape rather than isdecimal()'s integer-only one,
     while still refusing a unit or anything else int()/float() cannot read
-    with a named ConversionError rather than a raw traceback.
+    with a named ConversionError rather than a raw traceback - the
+    authoring guard is unchanged, only where it runs.
     """
     try:
         return float(raw)
@@ -249,13 +256,22 @@ def _parse_plain_number(raw, attr_name):
     """A "plain number" HTML attribute as an int - ConversionError, not a
     bare traceback, for anything int() cannot parse.
 
-    Shared by data-width, data-colwidth, colspan and rowspan. Only
-    data-colwidth had this check at first; colspan and rowspan went
-    straight to a bare int(a[key]) with nothing catching a malformed value,
-    so "colspan=2.0" - exactly the shape a real page's own JSON float
-    produces once rendered by _format_number's counterpart before this fix
-    existed - escaped html_to_adf's ConversionError handling as a raw
-    Python ValueError traceback, all the way out through main().
+    Shared by colspan, rowspan, an ordered list's start number and a
+    paragraph's indent level - every one a count, not a dimension, so a
+    genuine fraction is never valid for any of them, only ever a sign of a
+    hand-written mistake (242px, 50%) or a unit Confluence would drop
+    silently. data-width and data-colwidth used to be here too; moved to
+    _parse_float once a live-site measurement found real, server-computed
+    fractional pixel widths on both (230.4, 253.44) - this helper's job is
+    catching an authoring mistake, and a value nobody typed by hand is
+    never that, whichever attribute it turns up on.
+
+    colspan and rowspan went straight to a bare int(a[key]) with nothing
+    catching a malformed value at first, so "colspan=2.0" - exactly the
+    shape a real page's own JSON float produces once rendered by
+    _format_number's counterpart - escaped html_to_adf's ConversionError
+    handling as a raw Python ValueError traceback, all the way out through
+    main().
 
     isdecimal(), not isdigit(): isdigit() is true for characters int()
     still rejects - a superscript or subscript digit ("2"-superscript,
@@ -289,7 +305,11 @@ def _breakout_marks(a):
         return []
     mark = {"type": "breakout", "attrs": {"mode": a["data-breakout-mode"]}}
     if "data-breakout-width" in a:
-        mark["attrs"]["width"] = _parse_plain_number(
+        # A pixel width the editor computed on resize, the same shape as a
+        # table's own width or a colwidth - _parse_float, not
+        # _parse_plain_number, so a genuine fraction is not refused as if
+        # it were a hand-authoring mistake.
+        mark["attrs"]["width"] = _parse_float(
             a["data-breakout-width"], "data-breakout-width"
         )
     return [mark]
@@ -862,7 +882,10 @@ class _Builder(HTMLParser):
             # file already applies to its own attrs dict.
             attrs_out = {}
             if "data-width" in a:
-                attrs_out["width"] = _parse_plain_number(a["data-width"], "data-width")
+                # A table's own pixel width, editor-computed like colwidth
+                # below - _parse_float, not _parse_plain_number, for the
+                # same reason (see _parse_plain_number's own docstring).
+                attrs_out["width"] = _parse_float(a["data-width"], "data-width")
             if "data-layout" in a:
                 attrs_out["layout"] = a["data-layout"]
             if a.get("data-number-column") == "true":
@@ -953,8 +976,19 @@ class _Builder(HTMLParser):
             raw = a.get("data-colwidth")
             raw_values = raw.split(",") if raw is not None else None
             if raw_values is not None:
+                # A pixel width the editor computed, not a count - a live
+                # site measurement of an older, otherwise-untouched
+                # population of real pages found genuinely fractional
+                # values here (230.4, 253.44), which _parse_plain_number's
+                # whole-number-only rule refused outright. _parse_float,
+                # like table's own width and a breakout's width above, for
+                # the same reason: see _parse_plain_number's own docstring.
+                # 242px and 50% are still refused, with the same message,
+                # because float() cannot parse either any more than int()
+                # could - only the genuine fraction a hand-typed value can
+                # never honestly be is now allowed through.
                 cell_attrs["colwidth"] = [
-                    _parse_plain_number(v, "data-colwidth") for v in raw_values
+                    _parse_float(v, "data-colwidth") for v in raw_values
                 ]
             for i in range(colspan):
                 value = raw_values[i] if raw_values and i < len(raw_values) else None

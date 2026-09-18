@@ -2304,6 +2304,102 @@ class TestLayoutColumnWidth(unittest.TestCase):
         self.assertEqual(columns[1]["attrs"]["width"], 50.0)
 
 
+class TestFractionalDimensions(unittest.TestCase):
+    """data-colwidth, a table's own data-width, and a breakout's
+    data-breakout-width are pixel dimensions the editor computed, not
+    counts an author types - and real ADF carries genuine fractions there
+    (230.4, 253.44), not just whole pixels.
+
+    Found on a third population of real pages nobody had sampled yet (the
+    oldest pages on the site, `order by created asc`) after the previous
+    two fixes had already been independently re-verified: two pages
+    raised ConversionError outright - not a round-trip mismatch, a refusal
+    on the very first conversion - because _parse_plain_number's
+    whole-number-only rule (right for colspan, rowspan, an ordered list's
+    start number and a paragraph's indent level, none of which is ever
+    genuinely fractional) was also being applied to dimensions Confluence
+    itself had computed as fractions. The fix moves colwidth/table-width/
+    breakout-width onto _parse_float, the same helper mediaSingle/media
+    width and height already used for exactly this reason - the
+    authoring guard (refusing 242px, 50%, or anything else float() cannot
+    parse) is unchanged, only where it runs.
+    """
+
+    def test_a_fractional_colwidth_round_trips_exactly(self):
+        # 230.4 must come back as 230.4 - not 230 (truncated) and not
+        # 230.40 (a trailing zero _format_number would never add but a
+        # careless reimplementation might).
+        doc = html_to_adf(
+            '<table><tbody><tr><td data-colwidth="230.4"><p>x</p></td>'
+            '<td data-colwidth="253.44"><p>y</p></td></tr></tbody></table>'
+        )
+        cells = doc["content"][0]["content"][0]["content"]
+        self.assertEqual(cells[0]["attrs"]["colwidth"], [230.4])
+        self.assertEqual(cells[1]["attrs"]["colwidth"], [253.44])
+        ok, differing_type = check_roundtrip(doc)
+        self.assertTrue(ok, differing_type)
+        html = adf_to_html(doc)
+        self.assertIn('data-colwidth="230.4"', html)
+        self.assertIn('data-colwidth="253.44"', html)
+
+    def test_a_fractional_table_width_round_trips(self):
+        doc = html_to_adf(
+            '<table data-width="1799.6"><tbody><tr>'
+            "<td><p>x</p></td></tr></tbody></table>"
+        )
+        self.assertEqual(doc["content"][0]["attrs"]["width"], 1799.6)
+        ok, differing_type = check_roundtrip(doc)
+        self.assertTrue(ok, differing_type)
+
+    def test_a_fractional_breakout_width_round_trips(self):
+        doc = html_to_adf(
+            '<pre data-breakout-mode="wide" data-breakout-width="1800.5">'
+            "<code>x</code></pre>"
+        )
+        self.assertEqual(
+            doc["content"][0]["marks"][0]["attrs"]["width"], 1800.5
+        )
+        ok, differing_type = check_roundtrip(doc)
+        self.assertTrue(ok, differing_type)
+
+    def test_a_unit_on_colwidth_is_still_refused(self):
+        # The authoring guard survives the move to _parse_float: float()
+        # cannot parse "242px" any more than int() could.
+        with self.assertRaises(ConversionError) as cm:
+            html_to_adf(
+                '<table><tbody><tr><td data-colwidth="242px"><p>x</p></td>'
+                "</tr></tbody></table>"
+            )
+        self.assertIn("242px", str(cm.exception))
+        self.assertIn("plain number", str(cm.exception))
+
+    def test_a_percentage_on_colwidth_is_still_refused(self):
+        with self.assertRaises(ConversionError) as cm:
+            html_to_adf(
+                '<table><tbody><tr><td data-colwidth="50%"><p>x</p></td>'
+                "</tr></tbody></table>"
+            )
+        self.assertIn("50%", str(cm.exception))
+
+    def test_a_unit_on_table_width_is_still_refused(self):
+        with self.assertRaises(ConversionError) as cm:
+            html_to_adf('<table data-width="1800px"><tbody><tr>'
+                        "<td><p>x</p></td></tr></tbody></table>")
+        self.assertIn("1800px", str(cm.exception))
+
+    def test_colspan_and_rowspan_stay_whole_number_only(self):
+        # The narrowing this fix deliberately did NOT make: colspan/rowspan
+        # are counts, never genuinely fractional, so a decimal there is
+        # still an authoring mistake, not a real page's own value.
+        with self.assertRaises(ConversionError) as cm:
+            html_to_adf(
+                '<table><tbody><tr><td colspan="2.5"><p>x</p></td></tr>'
+                "</tbody></table>"
+            )
+        self.assertIn("colspan", str(cm.exception))
+        self.assertIn("plain number", str(cm.exception))
+
+
 class TestTableAttrsOmission(unittest.TestCase):
     """A bare <table> with none of data-width/layout/number-column/
     display-mode/local-id gets no "attrs" key at all, not an empty {}.

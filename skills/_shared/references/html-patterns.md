@@ -199,8 +199,11 @@ to author.
 ```
 
 `data-colwidth` goes on **every cell of a column**, header and body alike, with
-the same value. Widths are plain numbers with no unit: `242`, never `242px`.
-Anything that is not a plain number is dropped rather than coerced.
+the same value. Widths are plain numbers with no unit: `242`, never `242px`
+and never `50%`. A fetched page's own widths are often not whole pixels
+(`230.4` is a real, ordinary value - the editor computed it, nobody typed it),
+and that is fine to copy through verbatim; what is refused is a unit or
+anything else that is not a number at all.
 
 A cell spanning more than one column with `colspan` carries one width per
 spanned column, comma separated: `data-colwidth="200,400"` on a `colspan="2"`
