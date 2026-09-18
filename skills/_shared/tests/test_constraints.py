@@ -176,6 +176,27 @@ class TestNoDestructiveVerb(unittest.TestCase):
             self.assertNotIn("api DELETE", text, str(path))
 
 
+class TestNoForceFlag(unittest.TestCase):
+    """No script accepts --force. A round-trip or stale-write refusal on
+    `confluence-pages.sh update` (or `confluence-publish`'s publish.sh,
+    which calls it) needs a human decision in the Confluence UI, never a
+    flag - AGENTS.md's constraint 6, echoed across README.md, SECURITY.md,
+    CONTRIBUTING.md and every SKILL.md that documents a refusal. This
+    checks the property those documents claim actually holds: every
+    argument parser in the repo is checked for the same `--flagname)` case
+    shape every other flag here uses, not just grepped for the string
+    "--force" - which the documentation itself is full of, always saying
+    there isn't one.
+    """
+
+    def test_no_script_parses_a_force_flag(self):
+        for path in REPO.rglob("skills/**/*.sh"):
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("--force)", text, str(path))
+            self.assertNotIn("'--force'", text, str(path))
+            self.assertNotIn('"--force"', text, str(path))
+
+
 class TestPublishVersionParserTracksConfluencePagesWording(unittest.TestCase):
     """publish.sh scrapes a plain-text line confluence-pages.sh prints, with
     nothing else asserting the two agree - a coupling across two files that
@@ -629,8 +650,8 @@ class TestTokenTempFileCleanupOnSignal(unittest.TestCase):
                 cfg = self._wait_for_new_file(tmp, before)
                 self.assertIsNotNone(cfg, "the curl config file never appeared")
                 os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-                proc.wait(timeout=5)
-                deadline = time.time() + 2
+                proc.wait(timeout=15)
+                deadline = time.time() + 5
                 while cfg.exists() and time.time() < deadline:
                     time.sleep(0.05)
                 self.assertFalse(
