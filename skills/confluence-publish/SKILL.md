@@ -71,7 +71,12 @@ Ordinary prose in markdown.
 More prose.
 ```
 
-Read `${CLAUDE_SKILL_DIR}/../_shared/references/html-patterns.md` for every pattern, and `house-style.md` for when to use which.
+**Read these two files first. Every time.** They are the difference between a page that uses the platform and a page that is a wall of bold text:
+
+1. `${CLAUDE_SKILL_DIR}/../_shared/references/house-style.md` - the conventions, and when to reach for a raw HTML+ pattern instead of plain markdown
+2. `${CLAUDE_SKILL_DIR}/../_shared/references/html-patterns.md` - every HTML+ pattern markdown has no syntax for
+
+And if it exists, read `~/.dbhq/atlassian/house-style.md` too. That is the user's own tone and conventions, and it wins over anything in the shipped reference.
 
 **Nested markdown lists are refused, not mangled.** `- one` with `  - nested` indented under it stops the conversion outright, naming the line, rather than silently splitting into two lists with the marker left as stray text:
 

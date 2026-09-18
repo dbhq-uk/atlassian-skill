@@ -15,7 +15,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILLS_ROOT="$HOME/.claude/skills"
 
-echo "=== jira installer (Claude Code) ==="
+echo "=== atlassian installer (Claude Code) ==="
 echo
 
 # --- Dependencies ---
@@ -58,4 +58,4 @@ if [ -n "$SETUPS" ]; then
 fi
 
 echo
-echo "Done. Try: 'what Jira projects can I see'"
+echo "Done. Try: 'what Jira projects can I see' or 'what Confluence spaces can I see'"

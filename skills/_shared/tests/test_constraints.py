@@ -240,5 +240,130 @@ class TestNoEmDash(unittest.TestCase):
             self.assertNotIn(EN_DASH, text, f"en dash in {path.relative_to(REPO)}")
 
 
+class TestHouseStyleIsOnTheWritePath(unittest.TestCase):
+    """A reference nothing is required to read is a reference nobody reads.
+
+    This is why the house style is a reference rather than a fourth skill: a
+    skill has to trigger on its own description and can silently not fire,
+    where a SKILL.md instruction to read a file before writing cannot.
+    """
+
+    WRITERS = ("confluence", "confluence-publish", "jira")
+
+    def test_every_write_path_reads_the_house_style(self):
+        for name in self.WRITERS:
+            skill = REPO / "skills" / name / "SKILL.md"
+            text = skill.read_text(encoding="utf-8")
+            self.assertIn("_shared/references/house-style.md", text, name)
+            self.assertIn("_shared/references/html-patterns.md", text, name)
+
+    def test_every_write_path_names_the_user_override(self):
+        for name in self.WRITERS:
+            text = (REPO / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
+            self.assertIn("~/.dbhq/atlassian/house-style.md", text, name)
+
+
+class TestCredentialMove(unittest.TestCase):
+    """An existing install moves once, and a fresh one does not move at all."""
+
+    def _run_common(self, home):
+        import subprocess
+        return subprocess.run(
+            ["bash", "-c",
+             f'. "{REPO}/skills/_shared/scripts/_common.sh"; echo "$CONFIG_DIR"'],
+            capture_output=True, text=True,
+            env={"HOME": str(home), "PATH": "/usr/bin:/bin"},
+        )
+
+    def test_a_dbhq_jira_install_moves_to_atlassian(self):
+        import json
+        import tempfile
+        with tempfile.TemporaryDirectory() as home:
+            home = pathlib.Path(home)
+            old = home / ".dbhq" / "jira"
+            old.mkdir(parents=True)
+            (old / "config.json").write_text(json.dumps({"site": "x"}))
+            self._run_common(home)
+            self.assertFalse(old.exists(), "the old directory was left behind")
+            new = home / ".dbhq" / "atlassian" / "config.json"
+            self.assertTrue(new.is_file(), "the credential did not arrive")
+            self.assertEqual(json.loads(new.read_text())["site"], "x")
+
+    def test_a_legacy_dot_jira_install_also_moves(self):
+        import json
+        import tempfile
+        with tempfile.TemporaryDirectory() as home:
+            home = pathlib.Path(home)
+            old = home / ".jira"
+            old.mkdir(parents=True)
+            (old / "config.json").write_text(json.dumps({"site": "x"}))
+            self._run_common(home)
+            self.assertFalse(old.exists())
+            self.assertTrue((home / ".dbhq" / "atlassian" / "config.json").is_file())
+
+    def test_a_fresh_install_moves_nothing_and_does_not_fail(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as home:
+            home = pathlib.Path(home)
+            result = self._run_common(home)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((home / ".dbhq" / "atlassian" / "config.json").exists())
+
+    def test_it_does_not_move_twice(self):
+        # An install already at ~/.dbhq/atlassian keeps what it has, even if a
+        # stale ~/.dbhq/jira is still lying around.
+        import json
+        import tempfile
+        with tempfile.TemporaryDirectory() as home:
+            home = pathlib.Path(home)
+            current = home / ".dbhq" / "atlassian"
+            current.mkdir(parents=True)
+            (current / "config.json").write_text(json.dumps({"site": "keep"}))
+            stale = home / ".dbhq" / "jira"
+            stale.mkdir(parents=True)
+            (stale / "config.json").write_text(json.dumps({"site": "stale"}))
+            self._run_common(home)
+            self.assertEqual(
+                json.loads((current / "config.json").read_text())["site"], "keep"
+            )
+            self.assertTrue(stale.exists(), "a stale directory is left alone, not deleted")
+
+
+class TestPublishIdempotency(unittest.TestCase):
+    """A second publish of an unchanged file must update, never create."""
+
+    def test_publish_dry_run_reports_update_when_a_page_id_is_bound(self):
+        import subprocess
+        import tempfile
+        script = REPO / "skills" / "confluence-publish" / "scripts" / "publish.sh"
+        with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as f:
+            f.write(
+                '---\nconfluence:\n  space: "1"\n  page_id: "8901234"\n---\n\n'
+                "# Title\n\nBody.\n"
+            )
+            path = f.name
+        result = subprocess.run(
+            ["bash", str(script), path, "--dry-run"],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("UPDATE page 8901234", result.stdout)
+        self.assertIn("Nothing was sent.", result.stdout)
+
+    def test_publish_dry_run_reports_create_when_no_page_id_is_bound(self):
+        import subprocess
+        import tempfile
+        script = REPO / "skills" / "confluence-publish" / "scripts" / "publish.sh"
+        with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as f:
+            f.write('---\nconfluence:\n  space: "1"\n---\n\n# Title\n\nBody.\n')
+            path = f.name
+        result = subprocess.run(
+            ["bash", str(script), path, "--dry-run"],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("CREATE", result.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -13,7 +13,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILLS_ROOT="$HOME/.codex/skills"
 
-echo "=== jira installer (Codex) ==="
+echo "=== atlassian installer (Codex) ==="
 echo
 
 # --- Dependencies ---
@@ -35,6 +35,20 @@ for src in "$SCRIPT_DIR"/skills/*/; do
   name="$(basename "$src")"
   target="$SKILLS_ROOT/$name"
   echo "Installing '$name' -> $target"
+
+  # _shared is not a skill - it has no SKILL.md, because nothing installs it
+  # on its own; jira, confluence and confluence-publish all reach it as
+  # ${CLAUDE_SKILL_DIR}/../_shared/. There is no ${CLAUDE_SKILL_DIR} inside it
+  # to rewrite, so it is symlinked whole, the same way install.sh does it for
+  # Claude Code - not stepped into the SKILL.md-rewrite path below, which
+  # would fail on the file every other directory here has and this one does
+  # not.
+  if [ ! -f "$src/SKILL.md" ]; then
+    rm -rf "$target"
+    ln -sfn "$src" "$target"
+    continue
+  fi
+
   mkdir -p "$target"
   # Clear what a previous install left before linking what this one needs.
   # Without this, an entry since renamed or deleted upstream survives as a
@@ -65,4 +79,4 @@ if [ -n "$SETUPS" ]; then
 fi
 
 echo
-echo "Done. Try: 'what Jira projects can I see'"
+echo "Done. Try: 'what Jira projects can I see' or 'what Confluence spaces can I see'"
