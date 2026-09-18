@@ -1274,6 +1274,56 @@ class TestMedia(unittest.TestCase):
         self.assertTrue(ok, differing_type)
         self.assertEqual(html_to_adf(adf_to_html(doc)), doc)
 
+    def test_a_task_list_with_no_localid_key_stays_that_way(self):
+        # Companion to the caption case above, and to the real-taskItem
+        # case before it. The earlier fix (Task 15's first pass) carried a
+        # present localId value through correctly but still defaulted a
+        # MISSING key to "" on the way in, so a node that never had a
+        # localId at all - not authored by hand, and not what Confluence
+        # itself sends either, but the shape check_roundtrip must not
+        # invent structure for - gained one (attrs: {"localId": ""})
+        # anyway, on every pass. That still fails the round-trip gate the
+        # same way a wrong value would: present-but-empty and absent are
+        # different ADF. Review finding, fixed the same way caption
+        # already was - by omitting the key (and, for taskList, the whole
+        # attrs dict, since it holds nothing else) rather than defaulting
+        # it.
+        doc = {
+            "type": "doc", "version": 1,
+            "content": [
+                {"type": "taskList", "content": [
+                    {"type": "taskItem", "attrs": {"state": "TODO"},
+                     "content": [{"type": "text", "text": "Plain"}]},
+                ]},
+            ],
+        }
+        ok, differing_type = check_roundtrip(doc)
+        self.assertTrue(ok, differing_type)
+        roundtripped = html_to_adf(adf_to_html(doc))
+        self.assertEqual(roundtripped, doc)
+        self.assertNotIn("attrs", roundtripped["content"][0])
+        self.assertNotIn("localId", roundtripped["content"][0]["content"][0]["attrs"])
+
+    def test_a_decision_list_with_no_localid_key_stays_that_way(self):
+        # Same case, decisionItem's sibling family - decisionItem always
+        # carries state (like taskItem carries state), decisionList never
+        # carries anything but localId (like taskList).
+        doc = {
+            "type": "doc", "version": 1,
+            "content": [
+                {"type": "decisionList", "content": [
+                    {"type": "decisionItem", "attrs": {"state": "DECIDED"},
+                     "content": [{"type": "text", "text": "Agreed"}]},
+                ]},
+            ],
+        }
+        ok, differing_type = check_roundtrip(doc)
+        self.assertTrue(ok, differing_type)
+        roundtripped = html_to_adf(adf_to_html(doc))
+        self.assertEqual(roundtripped, doc)
+        self.assertNotIn("attrs", roundtripped["content"][0])
+        self.assertNotIn("localId", roundtripped["content"][0]["content"][0]["attrs"])
+
     def test_a_non_file_media_node_falls_back_to_opaque_not_a_crash(self):
         # Task 14's live-site measurement found the other real media shape:
         # type "external" (a bare url, no id or collection - pasting an

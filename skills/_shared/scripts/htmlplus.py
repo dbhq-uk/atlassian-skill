@@ -528,12 +528,23 @@ class _Builder(HTMLParser):
             self._append(self._pending_status)
 
         elif tag == "ul" and dtype == "task-list":
-            # localId defaults to "" (never authored by hand) but is read
-            # back from data-local-id when present - see the taskItem
-            # branch below for why this matters: proven live (Task 15),
-            # not assumed from the media/caption precedent alone.
-            self._open({"type": "taskList",
-                        "attrs": {"localId": a.get("data-local-id", "")}})
+            # localId round-trips through data-local-id when present - see
+            # the taskItem branch below for why this matters: proven live
+            # (Task 15), not assumed from the media/caption precedent
+            # alone. The key is omitted rather than defaulted to "" when
+            # absent - review finding on this task: a node authored fresh,
+            # with no data-local-id at all, used to gain attrs: {"localId":
+            # ""} anyway, which is not what the source had and fails
+            # check-roundtrip against anything that genuinely carries no
+            # localId key (a hand-authored ADF fixture; conceivably a
+            # future API response). caption below already gets this right
+            # - no attrs key at all when it has nothing to hold - and
+            # taskList has no other attrs, so the same omission applies to
+            # the whole attrs key, not just the value inside it.
+            node = {"type": "taskList"}
+            if "data-local-id" in a:
+                node["attrs"] = {"localId": a["data-local-id"]}
+            self._open(node)
         elif tag == "li" and dtype == "task-item":
             # Confluence assigns every taskItem a real localId on save,
             # even when the create request sent none (the enclosing
@@ -544,9 +555,12 @@ class _Builder(HTMLParser):
             # "" in place of the id Confluence had assigned, and update's
             # round-trip gate refused every page with a task list on it -
             # proven live against a real site, not assumed (Task 15).
-            self._open({"type": "taskItem",
-                        "attrs": {"localId": a.get("data-local-id", ""),
-                                  "state": "TODO"}})
+            # Unlike taskList, taskItem's attrs always exists (it holds
+            # state too), so only the localId key inside it is conditional.
+            attrs = {"state": "TODO"}
+            if "data-local-id" in a:
+                attrs["localId"] = a["data-local-id"]
+            self._open({"type": "taskItem", "attrs": attrs})
         elif tag == "input":
             # The checkbox carries the state of the task item it sits in.
             if "checked" in a:
@@ -559,8 +573,11 @@ class _Builder(HTMLParser):
                 self.blocks[-1]["attrs"]["state"] = "DONE"
 
         elif tag == "ul" and dtype == "decision-list":
-            self._open({"type": "decisionList",
-                        "attrs": {"localId": a.get("data-local-id", "")}})
+            # Same treatment as taskList above, for the same reason.
+            node = {"type": "decisionList"}
+            if "data-local-id" in a:
+                node["attrs"] = {"localId": a["data-local-id"]}
+            self._open(node)
         elif tag == "li" and dtype == "decision-item":
             state = a.get("data-state", "DECIDED")
             if state not in DECISION_STATES:
@@ -571,9 +588,10 @@ class _Builder(HTMLParser):
             # Same localId treatment as taskItem above, and for the same
             # reason: decisionItem is Confluence's other server-assigned-id
             # list type, sibling to taskItem in every way that matters here.
-            self._open({"type": "decisionItem",
-                        "attrs": {"localId": a.get("data-local-id", ""),
-                                  "state": state}})
+            attrs = {"state": state}
+            if "data-local-id" in a:
+                attrs["localId"] = a["data-local-id"]
+            self._open({"type": "decisionItem", "attrs": attrs})
 
         elif tag == "details":
             self._open({"type": "expand", "attrs": {"title": ""}})
@@ -1154,23 +1172,30 @@ def _node_to_html(node):
     if t == "taskList":
         # localId round-trips through data-local-id - see the html_to_adf
         # side for why dropping it used to fail check-roundtrip on every
-        # fetched page with a task list. attrs["localId"] is always present
-        # coming from html_to_adf (possibly ""), so this always emits the
-        # attribute rather than only when truthy - an absent attribute and
-        # a present-but-empty one are different HTML, and only one of them
-        # is what html_to_adf's own a.get("data-local-id", "") expects back.
-        return (f'<ul data-type="task-list" data-local-id="{a.get("localId", "")}">'
+        # fetched page with a task list. Emitted only when the "localId"
+        # key is actually present (matching html_to_adf's own now-omitted-
+        # rather-than-defaulted key, and the caption pattern below) -
+        # present-but-empty and absent are different ADF, and only "in a"
+        # tells them apart; a.get(..., "") would print data-local-id=""
+        # for a node that never had the key at all, and html_to_adf would
+        # then read that back as a present-but-empty key, still not what
+        # the source had.
+        local_id = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        return (f'<ul data-type="task-list"{local_id}>'
                 f"{_children_html(node)}</ul>")
     if t == "taskItem":
         checked = " checked" if a.get("state") == "DONE" else ""
-        return (f'<li data-type="task-item" data-local-id="{a.get("localId", "")}">'
+        local_id = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        return (f'<li data-type="task-item"{local_id}>'
                 f'<input type="checkbox"{checked}>{_inline_html(node)}</li>')
     if t == "decisionList":
-        return (f'<ul data-type="decision-list" data-local-id="{a.get("localId", "")}">'
+        local_id = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        return (f'<ul data-type="decision-list"{local_id}>'
                 f"{_children_html(node)}</ul>")
     if t == "decisionItem":
-        return (f'<li data-type="decision-item" data-state="{a.get("state", "DECIDED")}" '
-                f'data-local-id="{a.get("localId", "")}">'
+        local_id = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        return (f'<li data-type="decision-item" data-state="{a.get("state", "DECIDED")}"'
+                f"{local_id}>"
                 f"{_inline_html(node)}</li>")
     if t == "bulletList":
         return f"<ul>{_children_html(node)}</ul>"

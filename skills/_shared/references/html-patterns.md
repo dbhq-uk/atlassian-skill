@@ -68,6 +68,14 @@ A task list is not decoration: Confluence indexes tasks, so an item written as
 a real task appears in the assignee's own task view and in reports across the
 space. An item written as a dash and a name does not.
 
+All four elements above also carry a `data-local-id` on a page fetched back
+from Confluence - on the `<ul>` for a task list authored directly through this
+skill (Confluence leaves it empty), and always on each `<li>` item, task or
+decision, which Confluence assigns a real id to the moment it is saved, even
+when none was sent. Like the media `data-local-id` above, this is round-trip
+bookkeeping, not something to invent when hand-authoring a new list - leave it
+off, exactly as the examples above do, and Confluence assigns its own.
+
 ---
 
 ## Expands
