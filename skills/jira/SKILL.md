@@ -84,7 +84,7 @@ ${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh create PAY-12 Task "Confirm the egres
 
 And if it exists, read `~/.dbhq/atlassian/house-style.md` too. That is the user's own tone and conventions, and it wins over anything in the shipped reference.
 
-Work through `${CLAUDE_SKILL_DIR}/../_shared/references/checklist.md` against the body before you send it. Both reference files are written primarily for a Confluence page - skip the sections with no Jira equivalent (page titles, cross-page smart links, the page-properties macro) and read the rest as it applies to an issue description.
+Work through `${CLAUDE_SKILL_DIR}/../_shared/references/checklist.md` against the body before you send it. Both reference files are written primarily for a Confluence page - skip the sections with no Jira equivalent (page titles, cross-page smart links) and read the rest as it applies to an issue description.
 
 **Jira's ADF profile is narrower than Confluence's, and `--description-file` refuses what does not fit it.** A status lozenge, a decision list, an expand and a multi-column layout are Confluence-only components. The Jira API accepts a description containing one and then renders nothing where it should be - the worst kind of failure, because it looks like it worked. `--description-file` refuses these before anything is sent, naming the node:
 

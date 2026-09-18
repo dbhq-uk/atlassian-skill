@@ -97,27 +97,30 @@ log, a long field map, a superseded position kept for the record.
 
 ## Page properties
 
-The Version / Status / Source block at the top of a document page. Written as a
-bodied `details` macro, which makes the values readable by a page properties
-report elsewhere in the space:
+**Not supported yet.** The Version / Status / Source block at the top of a
+document page is Confluence's page-properties macro on a live page - a
+bodied `details` extension (`data-type="bodied-extension"`) that makes its
+values readable by a page-properties report elsewhere in the space.
+`htmlplus.py` has no HTML+ authoring form for a bodied extension: it can only
+ever arrive on a page opaquely, read back from a fetch, never written fresh.
+Authoring one by hand is refused:
+
+    Error: <div data-type=bodied-extension> is not a known HTML+ element.
+
+**Use a plain two-column table instead** - it is the pattern that actually
+publishes, not a lesser stand-in for the macro:
 
 ```html
-<div data-type="bodied-extension" data-extension-key="details"
-     data-extension-type="com.atlassian.confluence.macro.core"
-     data-parameters='{"macroParams":{"label":{"value":"doc-control"}},"macroMetadata":{"schemaVersion":{"value":"1"},"title":"Page Properties"}}'>
-  <table data-layout="default" data-width="900">
-    <tbody>
-      <tr><th data-colwidth="200"><p>Version</p></th><td data-colwidth="700"><p>v1.0</p></td></tr>
-      <tr><th data-colwidth="200"><p>Status</p></th><td data-colwidth="700"><p><span data-type="status" data-color="green">Built</span></p></td></tr>
-      <tr><th data-colwidth="200"><p>Updated</p></th><td data-colwidth="700"><p><time datetime="2026-09-08">8 September 2026</time></p></td></tr>
-    </tbody>
-  </table>
-</div>
+<table data-layout="default" data-width="900">
+  <tbody>
+    <tr><th data-colwidth="200"><p>Version</p></th><td data-colwidth="700"><p>v1.0</p></td></tr>
+    <tr><th data-colwidth="200"><p>Status</p></th><td data-colwidth="700"><p><span data-type="status" data-color="green">Built</span></p></td></tr>
+    <tr><th data-colwidth="200"><p>Updated</p></th><td data-colwidth="700"><p><time datetime="2026-09-08">8 September 2026</time></p></td></tr>
+  </tbody>
+</table>
 ```
 
-The first column is `<th>`, which renders it as a header column. A plain
-two-column table with an empty header row is the hand-built version of this and
-gains none of the reporting.
+The first column is `<th>`, which renders it as a header column.
 
 ---
 

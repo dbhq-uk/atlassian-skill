@@ -34,7 +34,6 @@ smart link.
 | `- [ ] Do the thing (Owner)` | Task list | `<ul data-type="task-list">` |
 | "We agreed X on this date" | Decision list | `<ul data-type="decision-list">` |
 | A long appendix nobody scrolls past | Expand | `<details><summary>…</summary>` |
-| A two-column Version / Status / Source table | Page properties | bodied `details` macro |
 | A raw `<a href>` to another Confluence page | Inline smart link | `<a href="URL" data-card-appearance="inline"></a>` |
 | `2026-09-17` as plain text | Date node | `<time datetime="2026-09-17">17 September 2026</time>` |
 

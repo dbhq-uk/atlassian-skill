@@ -17,8 +17,9 @@ and catches the things a reader notices first.
 - [ ] Every agreed position is a decision-list item.
 - [ ] Long reference material a reader does not need in their way sits in an
       expand.
-- [ ] The Version / Status / Source block is a page-properties macro, not a
-      plain two-column table with an empty header.
+- [ ] The Version / Status / Source block is a two-column table with a
+      header column - the page-properties macro is not supported yet, see
+      html-patterns.md.
 
 ## Tables
 
