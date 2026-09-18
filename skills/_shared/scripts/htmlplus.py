@@ -950,6 +950,33 @@ _LAYOUT_BY_COUNT = {1: "layout-section", 2: "layout-two-equal",
 # opaque passthrough is supposed to preserve.
 _INLINE_LEAF_TYPES = {"text", "status", "date", "inlineCard", "hardBreak"}
 
+# The attrs keys Task 14's mediaSingle/media/caption renderers each know how
+# to write out. Read by _node_to_html to decide, per node, whether named
+# rendering can represent this exact node completely - not just this node's
+# type and required fields, but every attrs key it actually carries.
+#
+# Review finding on this task: occurrenceKey is a real, schema-documented
+# ADF media attribute this model does not cover. A live site's media nodes
+# happened not to carry it in the 289-page sample this task was measured
+# against, so the gap did not show up there - but a media node that does
+# carry it rendered through the named branch anyway before this set existed,
+# silently dropping the attribute: round-tripping true under full opaque
+# passthrough and false under named support that could not fully represent
+# it. The fix is general, not "add occurrenceKey to the model" - that closes
+# this one instance and leaves the same shape of bug waiting for the next
+# attribute Atlassian ships. Instead: any attrs key outside the set below,
+# on any of the three types, falls back to the existing opaque passthrough,
+# the same as a type this converter has no named support for at all. That
+# makes a guarantee worth stating rather than just hoping for: named support
+# is never worse than opaque. A node the model fully understands gets a
+# readable, authorable figure; a node carrying anything else - today or in
+# some future ADF revision - degrades to a lossless blob rather than a lossy
+# render, and check_roundtrip catches it as "safe to read, not safe to
+# rewrite" if it ever somehow didn't.
+_MEDIA_SINGLE_ATTRS = {"layout", "width", "widthType"}
+_MEDIA_ATTRS = {"id", "type", "collection", "alt", "width", "height", "localId"}
+_CAPTION_ATTRS = {"localId"}
+
 
 def _escape(text):
     return (text.replace("&", "&amp;").replace("<", "&lt;")
@@ -1158,7 +1185,7 @@ def _node_to_html(node):
     if t in ("blockCard", "embedCard"):
         appearance = "block" if t == "blockCard" else "embed"
         return f'<a href="{a["url"]}" data-card-appearance="{appearance}"></a>'
-    if t == "mediaSingle":
+    if t == "mediaSingle" and set(a) <= _MEDIA_SINGLE_ATTRS:
         bits = [f'data-layout="{a.get("layout", "center")}"']
         if "width" in a:
             bits.append(f'data-width="{_format_number(a["width"])}"')
@@ -1167,16 +1194,19 @@ def _node_to_html(node):
         return (f'<figure data-type="media-single" {" ".join(bits)}>'
                 f"{_children_html(node)}</figure>")
     if t == "media" and a.get("type", "file") == "file" \
-            and "id" in a and "collection" in a:
+            and "id" in a and "collection" in a and set(a) <= _MEDIA_ATTRS:
         # Named support only for the shape this converter can represent
         # completely: a file attachment with an id and a collection - what
-        # attachments.sh upload actually produces. A media node of any
-        # other shape (Task 14's live-site measurement found "external"
-        # media on a real page: no id or collection, a bare url instead)
-        # falls through to the opaque branch at the end of this function
-        # instead, the same as any other node this converter does not fully
-        # model - never a KeyError on a["id"], and never a narrower,
-        # lossy render of something this converter cannot round-trip.
+        # attachments.sh upload actually produces - and no attrs key
+        # outside _MEDIA_ATTRS (review finding on this task: a media node
+        # carrying occurrenceKey, a real ADF attribute this model does not
+        # cover, used to render named anyway and silently drop it). A media
+        # node of any other shape (external type with no id/collection, or
+        # any node carrying an attribute this model does not know) falls
+        # through to the opaque branch at the end of this function instead,
+        # the same as any other node this converter does not fully model -
+        # never a KeyError on a["id"], and never a narrower, lossy render of
+        # something this converter cannot round-trip completely.
         bits = [f'data-media-type="{a.get("type", "file")}"',
                 f'data-id="{a["id"]}"', f'data-collection="{a["collection"]}"']
         if "alt" in a:
@@ -1188,7 +1218,7 @@ def _node_to_html(node):
         if "localId" in a:
             bits.append(f'data-local-id="{a["localId"]}"')
         return f'<div data-type="media" {" ".join(bits)}></div>'
-    if t == "caption":
+    if t == "caption" and set(a) <= _CAPTION_ATTRS:
         bits = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
         return f"<figcaption{bits}>{_inline_html(node)}</figcaption>"
     if t in _INLINE_LEAF_TYPES:

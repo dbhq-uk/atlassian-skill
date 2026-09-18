@@ -1297,6 +1297,101 @@ class TestMedia(unittest.TestCase):
         self.assertIn('data-type="adf-opaque"', html)
         self.assertEqual(html_to_adf(html), doc)
 
+    def test_a_media_node_with_occurrencekey_falls_back_to_opaque(self):
+        # Review finding on this task: occurrenceKey is a real,
+        # schema-documented ADF media attribute this converter's model
+        # does not cover. Before the fix, a media node carrying it
+        # rendered through the named branch anyway and silently dropped
+        # the attribute - round-tripping true under the pre-Task-14 (fully
+        # opaque) converter and false under a named renderer that could
+        # not fully represent it. It did not show up in the 289-page live
+        # sample this task was measured against because none of those
+        # nodes happened to carry the attribute - this fixture exists so
+        # the gap has a permanent regression test rather than depending on
+        # a future live sample to notice it again.
+        doc = {
+            "type": "doc", "version": 1,
+            "content": [
+                {"type": "media", "attrs": {
+                    "type": "file", "id": "abc-123", "collection": "contentId-999",
+                    "occurrenceKey": "11111111-1111-1111-1111-111111111111",
+                }},
+            ],
+        }
+        ok, differing_type = check_roundtrip(doc)
+        self.assertTrue(ok, differing_type)
+        html = adf_to_html(doc)
+        self.assertIn('data-type="adf-opaque"', html)
+        self.assertEqual(html_to_adf(html), doc)
+
+    def test_a_fully_modelled_media_node_still_renders_named(self):
+        # The other side of the fix above: falling back on an unmodelled
+        # attribute must not become falling back on everything. A media
+        # node carrying only the attrs this converter models still gets
+        # the readable, authorable <figure> form, not the opaque blob -
+        # the fallback narrows exactly to what it needs to, it does not
+        # quietly swallow the feature this task exists to add.
+        doc = {
+            "type": "doc", "version": 1,
+            "content": [
+                {"type": "mediaSingle", "attrs": {"layout": "center"},
+                 "content": [
+                     {"type": "media", "attrs": {
+                         "type": "file", "id": "abc-123",
+                         "collection": "contentId-999"}},
+                 ]},
+            ],
+        }
+        html = adf_to_html(doc)
+        self.assertNotIn("adf-opaque", html)
+        self.assertTrue(html.startswith('<figure data-type="media-single"'))
+        self.assertEqual(html_to_adf(html), doc)
+
+    def test_a_mediasingle_with_an_unmodelled_attr_falls_back_to_opaque(self):
+        # The same rule generalised to mediaSingle, not just media -
+        # proven here rather than only claimed, so the guarantee ("named
+        # support is never worse than opaque") holds for all three types
+        # this task added, not only the one the review finding named.
+        doc = {
+            "type": "doc", "version": 1,
+            "content": [
+                {"type": "mediaSingle",
+                 "attrs": {"layout": "center", "futureAttr": "not yet named"},
+                 "content": [
+                     {"type": "media", "attrs": {
+                         "type": "file", "id": "abc-123",
+                         "collection": "contentId-999"}},
+                 ]},
+            ],
+        }
+        ok, differing_type = check_roundtrip(doc)
+        self.assertTrue(ok, differing_type)
+        html = adf_to_html(doc)
+        self.assertIn('data-type="adf-opaque"', html)
+        self.assertEqual(html_to_adf(html), doc)
+
+    def test_a_caption_with_an_unmodelled_attr_falls_back_to_opaque(self):
+        # And the third of the three types this task added.
+        doc = {
+            "type": "doc", "version": 1,
+            "content": [
+                {"type": "mediaSingle", "attrs": {"layout": "center"},
+                 "content": [
+                     {"type": "media", "attrs": {
+                         "type": "file", "id": "abc-123",
+                         "collection": "contentId-999"}},
+                     {"type": "caption",
+                      "attrs": {"futureAttr": "not yet named"},
+                      "content": [{"type": "text", "text": "cap"}]},
+                 ]},
+            ],
+        }
+        ok, differing_type = check_roundtrip(doc)
+        self.assertTrue(ok, differing_type)
+        html = adf_to_html(doc)
+        self.assertIn('data-type="adf-opaque"', html)
+        self.assertEqual(html_to_adf(html), doc)
+
     def test_paragraph_cannot_hold_a_figure(self):
         # Mirrors test_paragraph_cannot_hold_a_block_card (Task 7, Finding
         # 3): a figure is a block, exactly like a table or a panel, and a
