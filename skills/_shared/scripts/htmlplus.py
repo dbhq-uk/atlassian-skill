@@ -562,14 +562,20 @@ class _Builder(HTMLParser):
                 attrs["localId"] = a["data-local-id"]
             self._open({"type": "taskItem", "attrs": attrs})
         elif tag == "input":
-            # The checkbox carries the state of the task item it sits in.
+            # The checkbox carries the state of the task item it sits in -
+            # checked or not, it must be inside one. Only the checked case
+            # validated this at first: an unchecked <input type="checkbox">
+            # outside a task-list item was silently dropped instead of
+            # refused - the one shape of this element that reached no
+            # error and no output at all, rather than either a task or a
+            # clear refusal.
+            if self.blocks[-1].get("type") != "taskItem":
+                raise ConversionError(
+                    "<input type=\"checkbox\"> found outside a task-list "
+                    'item. A checkbox belongs in a task-list item: <li '
+                    'data-type="task-item">.'
+                )
             if "checked" in a:
-                if self.blocks[-1].get("type") != "taskItem":
-                    raise ConversionError(
-                        "<input checked> found outside a task-list item. A "
-                        'checkbox belongs in a task-list item: <li '
-                        'data-type="task-item">.'
-                    )
                 self.blocks[-1]["attrs"]["state"] = "DONE"
 
         elif tag == "ul" and dtype == "decision-list":
@@ -1496,9 +1502,10 @@ def html_to_adf_for_jira(fragment):
         t = node.get("type")
         if t in CONFLUENCE_ONLY:
             raise ConversionError(
-                f"A {t} is a Confluence node and Jira does not render it. "
-                f"The API would accept the description and show nothing. "
-                f"Use a panel, a table, a code block or a task list instead."
+                f"{a_or_an(t).capitalize()} {t} is Confluence-only and "
+                f"Jira does not render it. The API would accept the "
+                f"description and show nothing. Use a panel, a table, a "
+                f"code block or a task list instead."
             )
     return doc
 

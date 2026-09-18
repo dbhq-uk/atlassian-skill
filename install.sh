@@ -1,5 +1,6 @@
 #!/bin/bash
-# Install the jira skill into ~/.claude/skills/ as a live symlink.
+# Install the jira, confluence and confluence-publish skills into
+# ~/.claude/skills/ as live symlinks.
 #
 # A SKILL.md references its scripts via ${CLAUDE_SKILL_DIR}, which Claude Code
 # substitutes to the skill's own directory for personal, project, and plugin
@@ -38,7 +39,17 @@ for src in "$SCRIPT_DIR"/skills/*/; do
   name="$(basename "$src")"
   target="$SKILLS_ROOT/$name"
   echo "Installing '$name' -> $target"
-  rm -rf "$target"            # replace any prior copy or partial-symlink install
+  # Only ever remove a symlink here, never a real directory - a target that
+  # exists and is NOT a symlink is left alone with an error rather than
+  # silently rm -rf'd, in case it is the user's own same-named directory
+  # rather than a prior install of this skill. install-codex.sh already
+  # gets this right for its own skill directories; this matches it.
+  if [ -e "$target" ] && [ ! -L "$target" ]; then
+    echo "Error: $target already exists and is not a symlink - not touching it." >&2
+    echo "Fix: move or remove it yourself, then re-run this installer." >&2
+    exit 1
+  fi
+  rm -f "$target"              # replace any prior symlink install
   ln -sfn "$src" "$target"    # whole-directory symlink; ${CLAUDE_SKILL_DIR} resolves it
   chmod +x "$src"/scripts/*.sh 2>/dev/null || true
 done

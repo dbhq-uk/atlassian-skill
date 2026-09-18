@@ -87,8 +87,9 @@ off, exactly as the examples above do, and Confluence assigns its own.
 ```
 
 An expand takes almost any block content including tables and panels. It
-cannot nest inside another expand. Inside a table cell it automatically
-becomes a nested expand, which is allowed.
+cannot nest inside another expand. Inside a table cell it is allowed, and
+this converter emits it as an ordinary `expand` node there too - not ADF's
+separate `nestedExpand` type, which this converter does not write.
 
 Use one for anything a reader needs available but not in their way: a change
 log, a long field map, a superseded position kept for the record.

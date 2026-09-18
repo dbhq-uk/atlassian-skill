@@ -92,7 +92,9 @@ the page.
 there is no `--force`.** Before `confluence-pages.sh update` (and
 `confluence-publish`'s `publish.sh`, which calls it) sends anything, it
 converts the page's current live content back through the converter and
-checks the result matches byte-for-byte. If it does not - typically because a
+checks the result matches (Python value equality on the ADF, not a byte- or
+string-identical comparison - `1800.0 == 1800` is equal, and correctly so).
+If it does not - typically because a
 human edited the page directly in the Confluence editor and wrote something
 this converter has no HTML+ form for - the write is refused, because sending
 it would silently drop whatever does not survive the round trip, not only the

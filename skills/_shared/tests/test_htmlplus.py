@@ -406,6 +406,16 @@ class TestOrphanTableAndCheckboxTags(unittest.TestCase):
         self.assertIn("checkbox", str(cm.exception))
         self.assertIn("task-list item", str(cm.exception))
 
+    def test_unchecked_checkbox_outside_a_task_item_is_also_rejected(self):
+        # Previously silently dropped rather than refused - the checked
+        # branch above validated placement, the unchecked one did not, so
+        # a misplaced <input type="checkbox"> with no checked attribute
+        # simply vanished with no error and no output at all.
+        with self.assertRaises(ConversionError) as cm:
+            html_to_adf('<p><input type="checkbox"></p>')
+        self.assertIn("checkbox", str(cm.exception))
+        self.assertIn("task-list item", str(cm.exception))
+
 
 class TestNesting(unittest.TestCase):
     """One case per row of the nesting table in references/html-patterns.md.

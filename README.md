@@ -130,11 +130,20 @@ code block and real checkboxes, rather than a wall of plain text.
 ## A known limit: the round-trip gate
 
 `confluence update` and `confluence-publish` both refuse to overwrite a page
-whose current content this converter cannot read back byte-for-byte
-unchanged - `UPDATE REPLACES THE WHOLE BODY`, so writing over content like
+whose current content this converter cannot read back unchanged (value
+equality on the parsed ADF, not a byte-identical comparison) -
+`UPDATE REPLACES THE WHOLE BODY`, so writing over content like
 that would silently drop whatever does not survive the round trip, not only
 the part you meant to change. **Measured across 289 real pages pulled from a
 live site, this refuses roughly 60% of them.**
+
+This is a separate guard from `--base-version`, which `update` also always
+requires: `--base-version` refuses a write if the page has moved on since
+the version you read, an optimistic-concurrency check unrelated to whether
+the content round-trips at all. The two can refuse the same command for two
+different reasons - a stale version, or content this converter cannot carry
+through unchanged - and both are named here because this is the section a
+refusal on either sends you to.
 
 The usual cause is an earlier direct edit in the Confluence web editor, which
 writes a node, an attribute or a mark this converter has no HTML+ form for.
@@ -284,7 +293,7 @@ directly in HTML+.
 
 ## Also from DBHQ
 
-Fifteen free agent skills, all of them installable from the same marketplace and
+Fourteen free agent skills, all of them installable from the same marketplace and
 all documented at **[skills.dbhq.uk](https://skills.dbhq.uk)**.
 
 | Skill | What it does |

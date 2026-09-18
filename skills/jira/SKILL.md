@@ -89,7 +89,7 @@ Work through `${CLAUDE_SKILL_DIR}/../_shared/references/checklist.md` against th
 **Jira's ADF profile is narrower than Confluence's, and `--description-file` refuses what does not fit it.** A status lozenge, a decision list, an expand and a multi-column layout are Confluence-only components. The Jira API accepts a description containing one and then renders nothing where it should be - the worst kind of failure, because it looks like it worked. `--description-file` refuses these before anything is sent, naming the node:
 
 ```
-Error: A status is a Confluence node and Jira does not render it. The API would accept the description and show nothing. Use a panel, a table, a code block or a task list instead.
+Error: A status is Confluence-only and Jira does not render it. The API would accept the description and show nothing. Use a panel, a table, a code block or a task list instead.
 ```
 
 Panels, code blocks with language highlighting, task lists, tables and headings all render correctly in a Jira issue - reach for those instead of the refused component.

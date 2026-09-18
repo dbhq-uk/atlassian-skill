@@ -115,6 +115,8 @@ Fix: nothing was sent. This page carries something this converter cannot round-t
 
 This means the page has a node type, or an attribute on one, that this converter cannot carry through unchanged - writing would silently alter part of the page your edit never touched, not just the part you meant to change. **Re-reading will not fix this, and there is no bypass and no `--force`.** Stop, and make this edit directly in the Confluence UI instead.
 
+**This refuses often - measured across 289 real pages pulled from a live site, roughly 60% of them.** The usual cause is an earlier direct edit in the Confluence web editor, writing a node, an attribute or a mark this converter has no HTML+ form for. That is expected behaviour on a page with editing history outside this skill, not a sign anything is broken.
+
 **Never invent an opaque id.** `data-id` and `data-collection` on a media node come from a fetch or from an upload step's output. A made-up one produces a broken node on a live page. An inline comment anchor - Confluence's annotation mark - and anything else this converter has no named HTML+ for arrive as `adf-opaque`/`adf-opaque-mark` (see `html-patterns.md`); copy that element through unchanged rather than inventing one.
 
 ## What the converter does for you

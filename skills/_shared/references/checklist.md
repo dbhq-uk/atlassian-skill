@@ -76,7 +76,9 @@ and catches the things a reader notices first.
       in the session.
 - [ ] The change was spliced into what came back, not into an older copy.
 - [ ] Local IDs, `data-colwidth` values, inline comment anchors, media IDs and
-      collections all survived unchanged.
+      collections all survived unchanged - except a table's or a heading's
+      own local id, which this converter does not read on the way in and so
+      cannot preserve even when copied through verbatim.
 - [ ] No opaque ID was invented.
 - [ ] The result was verified by re-fetching and reading the changed section.
 

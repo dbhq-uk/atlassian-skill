@@ -197,6 +197,9 @@ reliable route is always fetch, splice, verify:
    not deliberately changing: local IDs, `data-colwidth` values, inline
    comment anchors (Confluence's annotation mark, carried as
    `adf-opaque-mark` - see `html-patterns.md`), media IDs and collections.
+   **Exception: a table's or a heading's own local id.** This converter
+   does not read `data-local-id` on either when authoring, so it cannot be
+   preserved there even when copied through verbatim in the source.
 3. **Verify by re-fetching** and reading the section you changed.
 
 Never invent an opaque ID (`data-id`, `data-collection`). Copy them from the
