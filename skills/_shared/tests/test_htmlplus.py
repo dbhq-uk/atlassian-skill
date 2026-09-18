@@ -1241,6 +1241,39 @@ class TestMedia(unittest.TestCase):
         caption = roundtripped["content"][0]["content"][1]
         self.assertNotIn("attrs", caption)
 
+    def test_real_task_item_localid_survives_the_round_trip_gate(self):
+        # Live-proven, not assumed (Task 15): creating a page with a task
+        # list through this converter, then reading it straight back,
+        # showed Confluence had assigned every taskItem a real localId -
+        # "6ffa3fef-674f-4bd7-b1b6-fc8340fc603e" and its sibling below are
+        # shaped like the real ones observed, ids changed - while leaving
+        # the enclosing taskList's own localId empty. Before this fix,
+        # html_to_adf hardcoded localId: "" for taskList AND taskItem, so
+        # update's round-trip gate refused every page with a task list on
+        # it: the one thing this converter itself creates and Confluence
+        # itself immediately makes un-updatable. This is check_roundtrip
+        # itself, not just html_to_adf(adf_to_html(doc)) stability, because
+        # that is the exact check confluence-pages.sh update runs before
+        # every write.
+        doc = {
+            "type": "doc", "version": 1,
+            "content": [
+                {"type": "taskList", "attrs": {"localId": ""}, "content": [
+                    {"type": "taskItem",
+                     "attrs": {"state": "TODO",
+                               "localId": "6ffa3fef-674f-4bd7-b1b6-fc8340fc603e"},
+                     "content": [{"type": "text", "text": " A real task"}]},
+                    {"type": "taskItem",
+                     "attrs": {"state": "DONE",
+                               "localId": "f653ea70-c56a-4678-a03b-2994bf1c3b78"},
+                     "content": [{"type": "text", "text": " A done task"}]},
+                ]},
+            ],
+        }
+        ok, differing_type = check_roundtrip(doc)
+        self.assertTrue(ok, differing_type)
+        self.assertEqual(html_to_adf(adf_to_html(doc)), doc)
+
     def test_a_non_file_media_node_falls_back_to_opaque_not_a_crash(self):
         # Task 14's live-site measurement found the other real media shape:
         # type "external" (a bare url, no id or collection - pasting an

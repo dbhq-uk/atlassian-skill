@@ -211,7 +211,18 @@ def md_to_htmlplus(markdown):
 
 def main(argv=None):
     argparse.ArgumentParser(description=__doc__.splitlines()[0]).parse_args(argv)
-    sys.stdout.write(md_to_htmlplus(sys.stdin.read()))
+    # ConversionError is caught here, not left to propagate, for the same
+    # reason htmlplus.py's own CLI catches it: this runs at the front of
+    # publish.sh's pipeline, piped straight into md_to_htmlplus.py, and an
+    # uncaught exception there is a multi-line Python traceback on stderr -
+    # accurate, but not what "surface it clearly" means for a publishing
+    # tool. A one-line "Error: ..." naming the offending line, and exit 1,
+    # is what the caller can actually act on.
+    try:
+        sys.stdout.write(md_to_htmlplus(sys.stdin.read()))
+    except ConversionError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
     return 0
 
 

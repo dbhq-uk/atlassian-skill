@@ -528,10 +528,25 @@ class _Builder(HTMLParser):
             self._append(self._pending_status)
 
         elif tag == "ul" and dtype == "task-list":
-            self._open({"type": "taskList", "attrs": {"localId": ""}})
+            # localId defaults to "" (never authored by hand) but is read
+            # back from data-local-id when present - see the taskItem
+            # branch below for why this matters: proven live (Task 15),
+            # not assumed from the media/caption precedent alone.
+            self._open({"type": "taskList",
+                        "attrs": {"localId": a.get("data-local-id", "")}})
         elif tag == "li" and dtype == "task-item":
+            # Confluence assigns every taskItem a real localId on save,
+            # even when the create request sent none (the enclosing
+            # taskList's own localId is left empty instead - the two do
+            # not behave the same way). Hardcoding "" here, as the brief
+            # this converter came from did, meant a fetched page's taskItem
+            # could never survive check-roundtrip: html_to_adf regenerated
+            # "" in place of the id Confluence had assigned, and update's
+            # round-trip gate refused every page with a task list on it -
+            # proven live against a real site, not assumed (Task 15).
             self._open({"type": "taskItem",
-                        "attrs": {"localId": "", "state": "TODO"}})
+                        "attrs": {"localId": a.get("data-local-id", ""),
+                                  "state": "TODO"}})
         elif tag == "input":
             # The checkbox carries the state of the task item it sits in.
             if "checked" in a:
@@ -544,7 +559,8 @@ class _Builder(HTMLParser):
                 self.blocks[-1]["attrs"]["state"] = "DONE"
 
         elif tag == "ul" and dtype == "decision-list":
-            self._open({"type": "decisionList", "attrs": {"localId": ""}})
+            self._open({"type": "decisionList",
+                        "attrs": {"localId": a.get("data-local-id", "")}})
         elif tag == "li" and dtype == "decision-item":
             state = a.get("data-state", "DECIDED")
             if state not in DECISION_STATES:
@@ -552,8 +568,12 @@ class _Builder(HTMLParser):
                     f'data-state="{state}" is not a decision state. '
                     f"Use DECIDED or UNDECIDED."
                 )
+            # Same localId treatment as taskItem above, and for the same
+            # reason: decisionItem is Confluence's other server-assigned-id
+            # list type, sibling to taskItem in every way that matters here.
             self._open({"type": "decisionItem",
-                        "attrs": {"localId": "", "state": state}})
+                        "attrs": {"localId": a.get("data-local-id", ""),
+                                  "state": state}})
 
         elif tag == "details":
             self._open({"type": "expand", "attrs": {"title": ""}})
@@ -1132,15 +1152,25 @@ def _node_to_html(node):
         lang = a.get("language", "plaintext")
         return f'<pre><code class="language-{lang}">{_escape(text)}</code></pre>'
     if t == "taskList":
-        return f'<ul data-type="task-list">{_children_html(node)}</ul>'
+        # localId round-trips through data-local-id - see the html_to_adf
+        # side for why dropping it used to fail check-roundtrip on every
+        # fetched page with a task list. attrs["localId"] is always present
+        # coming from html_to_adf (possibly ""), so this always emits the
+        # attribute rather than only when truthy - an absent attribute and
+        # a present-but-empty one are different HTML, and only one of them
+        # is what html_to_adf's own a.get("data-local-id", "") expects back.
+        return (f'<ul data-type="task-list" data-local-id="{a.get("localId", "")}">'
+                f"{_children_html(node)}</ul>")
     if t == "taskItem":
         checked = " checked" if a.get("state") == "DONE" else ""
-        return (f'<li data-type="task-item"><input type="checkbox"{checked}>'
-                f"{_inline_html(node)}</li>")
+        return (f'<li data-type="task-item" data-local-id="{a.get("localId", "")}">'
+                f'<input type="checkbox"{checked}>{_inline_html(node)}</li>')
     if t == "decisionList":
-        return f'<ul data-type="decision-list">{_children_html(node)}</ul>'
+        return (f'<ul data-type="decision-list" data-local-id="{a.get("localId", "")}">'
+                f"{_children_html(node)}</ul>")
     if t == "decisionItem":
-        return (f'<li data-type="decision-item" data-state="{a.get("state", "DECIDED")}">'
+        return (f'<li data-type="decision-item" data-state="{a.get("state", "DECIDED")}" '
+                f'data-local-id="{a.get("localId", "")}">'
                 f"{_inline_html(node)}</li>")
     if t == "bulletList":
         return f"<ul>{_children_html(node)}</ul>"

@@ -1,0 +1,205 @@
+#!/bin/bash
+# Publish a markdown file to Confluence, idempotently.
+#
+# The file is the master and Confluence is the rendering. The binding lives in
+# the file's own frontmatter, so a move or a rename cannot break it:
+#
+#   ---
+#   confluence:
+#     space: "98765"
+#     parent: "1234567"
+#     page_id: "8901234"
+#   ---
+#
+# page_id is written back on the first publish. No page_id means create; a
+# page_id means update that page.
+#
+# Three things the brief this was built from did not know about, all fixed
+# here rather than reproduced:
+#
+# - confluence-pages.sh update now REQUIRES --base-version <n>, with no
+#   default and no inference (Task 12's stale-write guard). The file being
+#   the master does not make that guard pointless: it still catches a
+#   concurrent edit landing in the exact window between this run starting
+#   and it writing. What it changes is the REMEDY - a human editor splices
+#   their change into the newer version and retries; this script has
+#   nothing to splice, because the file on disk is already the whole
+#   intended content, so the remedy for a moved-on version is simply to run
+#   this again. The version passed is read fresh, immediately before the
+#   write, the same discipline confluence-pages.sh's own docs ask a human
+#   to follow by hand.
+#
+# - update also runs a round-trip gate: it refuses to overwrite a page whose
+#   current content this converter cannot read back unchanged (observed on
+#   real pages to refuse roughly 60% of the time). There is no --force
+#   anywhere in this skill family and this script adds none. A refusal here
+#   is not a bug to work around - it means the live page carries something,
+#   usually a direct edit made through the Confluence editor, that this
+#   converter cannot carry through safely, and only a human in the
+#   Confluence UI can resolve that. --dry-run against a file that already
+#   carries a page_id previews this by running the same check against the
+#   page as it stands right now, so the refusal is not a surprise on the
+#   real run.
+#
+# - the binding was read with `sed 's/^/FM_/' | eval` in the brief. eval
+#   runs the value half of a frontmatter line as shell too, and a markdown
+#   file is exactly the kind of thing that gets cloned from somewhere else -
+#   a space value crafted as `98765"; rm -rf ~ #` would execute the moment
+#   this script read the file it was asked to publish, before it ever spoke
+#   to Confluence. Parsed with parameter expansion instead; nothing here is
+#   ever eval'd.
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SHARED="$SCRIPT_DIR/../../_shared/scripts"
+PAGES="$SCRIPT_DIR/../../confluence/scripts/confluence-pages.sh"
+
+usage() {
+    cat >&2 <<'USAGE'
+Usage: publish.sh <file.md> [--dry-run] [--space <space-id>] [--parent <page-id>]
+
+  --dry-run   Convert everything and preview what would happen. Sends
+              nothing. If the file already carries a page_id, this also
+              reads (GET only) the live page to preview whether the
+              round-trip gate below would accept or refuse the update -
+              a file with no page_id yet needs no credentials at all.
+  --space     Space id, if the file's frontmatter does not carry one.
+  --parent    Parent page id, if the file's frontmatter does not carry one.
+
+The file's frontmatter is the binding and wins over the flags where both
+are present.
+USAGE
+    exit 1
+}
+
+FILE="${1:-}"; shift || usage
+[ -n "$FILE" ] && [ -f "$FILE" ] || usage
+
+DRY_RUN=0; SPACE_ARG=""; PARENT_ARG=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --dry-run) DRY_RUN=1; shift ;;
+        --space)   [ $# -ge 2 ] || usage; SPACE_ARG="$2";  shift 2 ;;
+        --parent)  [ $# -ge 2 ] || usage; PARENT_ARG="$2"; shift 2 ;;
+        *) usage ;;
+    esac
+done
+
+# --- Binding: plain key=value lines, picked apart with parameter expansion.
+# Never eval'd - see the header comment.
+FM_OUT=$(python3 "$SCRIPT_DIR/frontmatter.py" read "$FILE")
+FM_SPACE=$(printf '%s\n' "$FM_OUT" | sed -n 's/^space=//p')
+FM_PARENT=$(printf '%s\n' "$FM_OUT" | sed -n 's/^parent=//p')
+FM_PAGE_ID=$(printf '%s\n' "$FM_OUT" | sed -n 's/^page_id=//p')
+SPACE="${FM_SPACE:-$SPACE_ARG}"
+PARENT="${FM_PARENT:-$PARENT_ARG}"
+PAGE_ID="$FM_PAGE_ID"
+
+# --- Title: the first H1, else the filename ---
+TITLE=$(grep -m1 '^# ' "$FILE" | sed 's/^# //' || true)
+[ -n "$TITLE" ] || TITLE=$(basename "$FILE" .md)
+
+# --- Convert. This is where a bad body fails, before anything is sent. ---
+BODY=$(mktemp); trap 'rm -f "$BODY"' EXIT
+python3 "$SCRIPT_DIR/frontmatter.py" body "$FILE" \
+    | python3 "$SCRIPT_DIR/md_to_htmlplus.py" > "$BODY"
+
+# The source banner. A reader who cannot edit needs somewhere to put a
+# correction, so the warning names the route as well as the rule - a warning
+# without a route just tells people their feedback has nowhere to go.
+BANNER=$(mktemp); trap 'rm -f "$BODY" "$BANNER"' EXIT
+{
+    printf '<div data-type="panel-info"><p>'
+    printf 'Generated from <code>%s</code> in version control. ' "$FILE"
+    printf 'An edit made here is lost at the next publish - '
+    printf 'leave a page comment instead and it is read back into the source.'
+    printf '</p></div>'
+    cat "$BODY"
+} > "$BANNER.full" && mv "$BANNER.full" "$BANNER"
+
+# Prove it converts before reporting anything as safe.
+if ! python3 "$SHARED/htmlplus.py" to-adf < "$BANNER" > /dev/null; then
+    echo "Fix: correct $FILE and try again. Nothing was sent." >&2
+    exit 1
+fi
+
+if [ "$DRY_RUN" = "1" ]; then
+    echo "Dry run: $FILE"
+    echo "  Title:  $TITLE"
+    echo "  Space:  ${SPACE:-<none - pass --space>}"
+    echo "  Parent: ${PARENT:-<none>}"
+    if [ -n "$PAGE_ID" ]; then
+        echo "  Action: UPDATE page $PAGE_ID"
+        # Preview the round-trip gate against the page as it stands right
+        # now. "read" is GET only, so this does not break the "--dry-run
+        # sends nothing" promise - it can still go stale before the real
+        # run, which is why a refusal is previewed as "would be", not
+        # asserted as certain.
+        if READ_OUT=$("$PAGES" read "$PAGE_ID" --format adf 2>&1); then
+            ADF_JSON=$(printf '%s\n' "$READ_OUT" | grep -v '^#')
+            if ROUNDTRIP_ERR=$(printf '%s' "$ADF_JSON" \
+                    | python3 "$SHARED/htmlplus.py" check-roundtrip 2>&1 1>/dev/null); then
+                echo "  Round trip: page $PAGE_ID reads back unchanged - the update is expected to be accepted"
+            else
+                echo "  Round trip: WOULD LIKELY BE REFUSED - ${ROUNDTRIP_ERR#Error: }"
+                echo "    No --force exists for this. Fix the page in the Confluence UI first, or the real run will refuse the same way."
+            fi
+        else
+            echo "  Round trip: could not check - reading page $PAGE_ID failed:"
+            printf '%s\n' "$READ_OUT" | sed 's/^/    /'
+        fi
+    else
+        echo "  Action: CREATE, then write page_id back into the frontmatter"
+    fi
+    echo "  Body:   converts cleanly to ADF"
+    echo "Nothing was sent."
+    exit 0
+fi
+
+if [ -n "$PAGE_ID" ]; then
+    # Read the version fresh, immediately before the write - not cached from
+    # anywhere earlier in this run. See the header comment: the file is the
+    # master, so there is nothing to splice, only something to notice if a
+    # concurrent edit is in flight right now.
+    if ! READ_OUT=$("$PAGES" read "$PAGE_ID" --format adf); then
+        echo >&2
+        echo "Publish stopped: could not read page $PAGE_ID before updating. Nothing was sent." >&2
+        exit 1
+    fi
+    BASE_VERSION=$(printf '%s\n' "$READ_OUT" \
+        | sed -n 's/^# page id [0-9]*, version \([0-9]*\).*/\1/p')
+    [ -n "$BASE_VERSION" ] || {
+        echo "Error: could not read the current version of page $PAGE_ID." >&2
+        echo "Cause: 'read' did not print a version line for it." >&2
+        echo "Fix: run confluence-pages.sh read $PAGE_ID directly and check the page exists." >&2
+        exit 1
+    }
+    if ! "$PAGES" update "$PAGE_ID" --body-file "$BANNER" --title "$TITLE" \
+            --base-version "$BASE_VERSION" --message "Published from $FILE"; then
+        echo >&2
+        echo "Publish stopped: $FILE was not sent to page $PAGE_ID. Nothing changed. See the error above." >&2
+        echo "If the page moved on since this run started, just run publish.sh again - the file is the master, so there is nothing to splice by hand." >&2
+        echo "If the converter refused the round trip, there is no --force: resolve it directly in the Confluence UI, then re-run." >&2
+        exit 1
+    fi
+else
+    [ -n "$SPACE" ] || {
+        echo "Error: no space id." >&2
+        echo "Cause: the frontmatter has no confluence.space and --space was not passed." >&2
+        echo "Fix: add one, or pass --space <id>. List ids with confluence-search.sh spaces." >&2
+        exit 1
+    }
+    CREATE_ARGS=(--space "$SPACE" --title "$TITLE" --body-file "$BANNER")
+    [ -n "$PARENT" ] && CREATE_ARGS+=(--parent "$PARENT")
+    if ! OUT=$("$PAGES" create "${CREATE_ARGS[@]}"); then
+        echo >&2
+        echo "Publish stopped: $FILE was not sent. Nothing was created. See the error above." >&2
+        exit 1
+    fi
+    echo "$OUT"
+    NEW_ID=$(printf '%s' "$OUT" | sed -n 's/^Created page \([0-9]*\):.*/\1/p')
+    [ -n "$NEW_ID" ] || { echo "Error: could not read the new page id." >&2; exit 1; }
+    python3 "$SCRIPT_DIR/frontmatter.py" set-page-id "$FILE" "$NEW_ID"
+    echo "Wrote page_id $NEW_ID into $FILE - commit that change."
+fi
