@@ -185,9 +185,19 @@ class TestExpandAndCode(unittest.TestCase):
             },
         )
 
-    def test_code_block_without_a_language_is_plaintext(self):
+    def test_code_block_without_a_language_carries_no_language_key(self):
+        # A live-site measurement found real codeBlocks never carry a
+        # "language" attrs key at all when no language was picked (0 of 49
+        # sampled; 28 had no "attrs" key whatsoever) - Confluence's own
+        # editor omits it entirely rather than recording "plaintext" as if
+        # it had been chosen. Renamed from "...is_plaintext", which this
+        # converter used to invent to match: defaulting it meant a real
+        # unlabelled block rendered to HTML+ and back gained an attrs key
+        # the fetched page never had, failing the round-trip gate on every
+        # code block nobody had picked a language for.
         doc = html_to_adf("<pre><code>ls -la</code></pre>")
-        self.assertEqual(doc["content"][0]["attrs"]["language"], "plaintext")
+        self.assertNotIn("attrs", doc["content"][0])
+        self.assertEqual(html_to_adf(adf_to_html(doc)), doc)
 
 
 class TestDatesAndLinks(unittest.TestCase):
@@ -892,11 +902,35 @@ class TestOpaquePassthrough(unittest.TestCase):
         self.assertEqual(text_node["type"], "text")
         self.assertEqual(text_node["text"], "at risk")
 
-    def test_4_known_type_with_unknown_attrs_is_unaffected(self):
-        # Passthrough must trigger on an unrecognised type, never on merely
-        # unrecognised attrs of a type this converter already knows how to
-        # render - or every panel gains a future attribute this converter
-        # has not been taught yet becomes opaque instead of a panel.
+    def test_4_known_type_with_modelled_attrs_is_unaffected(self):
+        # Passthrough must trigger on an unrecognised type or an attrs key
+        # this converter genuinely does not model - never on an attrs key
+        # it does. Renamed from "unknown attrs" (this exact doc, with
+        # futureAttr, used to assert the opposite): that assertion was the
+        # pre-generalisation policy, kept accurate below in
+        # test_4b as the case it now demonstrates instead.
+        doc = {
+            "type": "doc", "version": 1,
+            "content": [
+                {"type": "panel",
+                 "attrs": {"panelType": "info", "localId": "abc123"},
+                 "content": [{"type": "paragraph",
+                              "content": [{"type": "text", "text": "x"}]}]},
+            ],
+        }
+        html = adf_to_html(doc)
+        self.assertNotIn("adf-opaque", html)
+        self.assertTrue(html.startswith('<div data-type="panel-info"'))
+        self.assertEqual(html_to_adf(html), doc)
+
+    def test_4b_known_type_with_unmodelled_attrs_now_falls_back_to_opaque(self):
+        # The policy this task generalised: a known type carrying an attrs
+        # key its renderer does not model used to render named anyway and
+        # silently drop the attribute - exactly the occurrenceKey bug the
+        # media family was hardened against below (TestMedia), just never
+        # extended to every other named type until now. futureAttr is a
+        # stand-in for "the next attribute Atlassian ships"; the point is
+        # that it survives rather than vanishing.
         doc = {
             "type": "doc", "version": 1,
             "content": [
@@ -906,9 +940,11 @@ class TestOpaquePassthrough(unittest.TestCase):
                               "content": [{"type": "text", "text": "x"}]}]},
             ],
         }
+        ok, differing_type = check_roundtrip(doc)
+        self.assertTrue(ok, differing_type)
         html = adf_to_html(doc)
-        self.assertNotIn("adf-opaque", html)
-        self.assertTrue(html.startswith('<div data-type="panel-info">'))
+        self.assertIn('data-type="adf-opaque"', html)
+        self.assertEqual(html_to_adf(html), doc)
 
     def test_5_opaque_node_inside_a_code_block_converts(self):
         # listItem was an earlier fixture for this test, but "extension" is
@@ -1586,23 +1622,31 @@ class TestReverseCli(unittest.TestCase):
         self.assertEqual(r.stdout, "")
 
     def test_check_roundtrip_exits_1_naming_the_type_on_a_lossy_document(self):
-        # A known type (orderedList) whose "order" attr this converter has
-        # no HTML+ syntax for - dropped silently by adf_to_html, so the
-        # page round-trips to something different from what was fetched.
+        # A known mark (subsup) carrying an attrs key this converter's
+        # named rendering does not use - dropped silently (only "type" is
+        # read back out), so the page round-trips to something different
+        # from what was fetched. orderedList's "order" was the fixture here
+        # until this task gave it a real data-* carry (the list's start
+        # number - see SIMPLE_BLOCKS handling in htmlplus.py), which closed
+        # the exact gap this test exists to demonstrate; subsup's own extra
+        # attrs is not something this task's node-level generalisation
+        # covers (marks that already have named per-type rendering, rather
+        # than the wholly-unrecognised-mark passthrough textColor and
+        # friends get, are out of its scope), so it keeps demonstrating a
+        # genuine refusal.
         doc = {
             "type": "doc", "version": 1,
             "content": [
-                {"type": "orderedList", "attrs": {"order": 5}, "content": [
-                    {"type": "listItem", "content": [
-                        {"type": "paragraph",
-                         "content": [{"type": "text", "text": "x"}]},
-                    ]},
+                {"type": "paragraph", "content": [
+                    {"type": "text", "text": "H2O",
+                     "marks": [{"type": "subsup",
+                                "attrs": {"type": "sub", "extraAttr": "keep-me"}}]},
                 ]},
             ],
         }
         r = self._run(["check-roundtrip"], json.dumps(doc))
         self.assertEqual(r.returncode, 1)
-        self.assertIn("orderedList", r.stderr)
+        self.assertIn("subsup", r.stderr)
         self.assertTrue(r.stderr.startswith("Error:"))
 
     def test_to_html_on_a_null_body_gives_one_line_not_a_traceback(self):
@@ -1677,20 +1721,23 @@ class TestRoundtripGate(unittest.TestCase):
         self.assertIsNone(differing_type)
 
     def test_lossy_known_type_is_not_ok_and_names_its_type(self):
+        # Same fixture and same reasoning as TestReverseCli's version of
+        # this test, above: orderedList's "order" attr used to be exactly
+        # this class's example and no longer is, now that this task gave it
+        # a real data-* carry.
         doc = {
             "type": "doc", "version": 1,
             "content": [
-                {"type": "orderedList", "attrs": {"order": 5}, "content": [
-                    {"type": "listItem", "content": [
-                        {"type": "paragraph",
-                         "content": [{"type": "text", "text": "x"}]},
-                    ]},
+                {"type": "paragraph", "content": [
+                    {"type": "text", "text": "H2O",
+                     "marks": [{"type": "subsup",
+                                "attrs": {"type": "sub", "extraAttr": "keep-me"}}]},
                 ]},
             ],
         }
         ok, differing_type = check_roundtrip(doc)
         self.assertFalse(ok)
-        self.assertEqual(differing_type, "orderedList")
+        self.assertEqual(differing_type, "subsup")
 
     def test_opaque_passthrough_content_is_ok(self):
         # The gate must not flag passthrough content as unsafe - that is
@@ -1852,6 +1899,467 @@ class TestJiraProfile(unittest.TestCase):
         })
         doc = html_to_adf_for_jira(opaque_div)
         self.assertEqual(doc["content"][0]["type"], "extension")
+
+
+class TestLocalIdGeneralisation(unittest.TestCase):
+    """localId, generalised from the six node types that already carried it
+    (media, caption, taskItem, taskList, decisionItem, decisionList) to
+    every other named node type a live-site measurement found it on.
+
+    Fixtures are invented (fake ids, never a real page's own), but the
+    shape - which node types carry localId, and how many real nodes of
+    each carried it - comes from that measurement: table, tableRow,
+    tableCell, tableHeader, heading and paragraph on a large minority to a
+    majority of real nodes; bulletList, orderedList, listItem, blockquote,
+    rule, panel, codeBlock, expand, status, date and the three card types
+    on most or all of them. Before this, any one of those made the page it
+    was on fail the round-trip gate - fetch, convert to HTML+, convert
+    back, compare - the exact gate confluence-pages.sh update runs before
+    every write.
+    """
+
+    def _round_trips(self, doc):
+        ok, differing_type = check_roundtrip(doc)
+        self.assertTrue(ok, differing_type)
+        self.assertEqual(html_to_adf(adf_to_html(doc)), doc)
+
+    def test_table_localid(self):
+        doc = html_to_adf('<table data-local-id="tbl-1"><tbody><tr>'
+                           "<td><p>x</p></td></tr></tbody></table>")
+        self.assertEqual(doc["content"][0]["attrs"]["localId"], "tbl-1")
+        self._round_trips(doc)
+
+    def test_table_row_localid(self):
+        doc = html_to_adf(
+            '<table><tbody><tr data-local-id="row-1"><td><p>x</p></td>'
+            "</tr></tbody></table>"
+        )
+        row = doc["content"][0]["content"][0]
+        self.assertEqual(row["attrs"]["localId"], "row-1")
+        self._round_trips(doc)
+
+    def test_table_cell_localid_and_background(self):
+        doc = html_to_adf(
+            '<table><tbody><tr><td data-local-id="cell-1" '
+            'data-background="#FFEBE6"><p>x</p></td></tr></tbody></table>'
+        )
+        cell = doc["content"][0]["content"][0]["content"][0]
+        self.assertEqual(cell["attrs"]["localId"], "cell-1")
+        self.assertEqual(cell["attrs"]["background"], "#FFEBE6")
+        self._round_trips(doc)
+
+    def test_heading_localid(self):
+        doc = html_to_adf('<h2 data-local-id="h-1">Open items</h2>')
+        self.assertEqual(doc["content"][0]["attrs"],
+                          {"level": 2, "localId": "h-1"})
+        self._round_trips(doc)
+
+    def test_paragraph_localid(self):
+        doc = html_to_adf('<p data-local-id="p-1">Hello.</p>')
+        self.assertEqual(doc["content"][0]["attrs"], {"localId": "p-1"})
+        self._round_trips(doc)
+
+    def test_bullet_list_and_list_item_localid(self):
+        doc = html_to_adf(
+            '<ul data-local-id="ul-1"><li data-local-id="li-1">'
+            "<p>one</p></li></ul>"
+        )
+        ul = doc["content"][0]
+        self.assertEqual(ul["attrs"], {"localId": "ul-1"})
+        self.assertEqual(ul["content"][0]["attrs"], {"localId": "li-1"})
+        self._round_trips(doc)
+
+    def test_blockquote_localid(self):
+        doc = html_to_adf('<blockquote data-local-id="bq-1"><p>x</p></blockquote>')
+        self.assertEqual(doc["content"][0]["attrs"], {"localId": "bq-1"})
+        self._round_trips(doc)
+
+    def test_rule_localid(self):
+        doc = html_to_adf('<hr data-local-id="hr-1">')
+        self.assertEqual(doc["content"][0], {"type": "rule",
+                                              "attrs": {"localId": "hr-1"}})
+        self._round_trips(doc)
+
+    def test_panel_localid(self):
+        doc = html_to_adf(
+            '<div data-type="panel-info" data-local-id="panel-1"><p>x</p></div>'
+        )
+        self.assertEqual(doc["content"][0]["attrs"]["localId"], "panel-1")
+        self._round_trips(doc)
+
+    def test_status_localid(self):
+        doc = html_to_adf(
+            '<p><span data-type="status" data-color="green" '
+            'data-local-id="status-1">Built</span></p>'
+        )
+        status = doc["content"][0]["content"][0]
+        self.assertEqual(status["attrs"]["localId"], "status-1")
+        self._round_trips(doc)
+
+    def test_date_localid(self):
+        doc = html_to_adf(
+            '<p>On <time datetime="2026-09-17" data-local-id="date-1">'
+            "17 September 2026</time>.</p>"
+        )
+        date = doc["content"][0]["content"][1]
+        self.assertEqual(date["attrs"]["localId"], "date-1")
+        self._round_trips(doc)
+
+    def test_card_localid_all_three_appearances(self):
+        for appearance, node_type in (("inline", "inlineCard"),
+                                       ("block", "blockCard"),
+                                       ("embed", "embedCard")):
+            with self.subTest(appearance=appearance):
+                fragment = (
+                    f'<a href="https://example.com/x" '
+                    f'data-card-appearance="{appearance}" '
+                    f'data-local-id="card-1"></a>'
+                )
+                if appearance == "inline":
+                    fragment = f"<p>{fragment}</p>"
+                doc = html_to_adf(fragment)
+                node = (doc["content"][0]["content"][0] if appearance == "inline"
+                        else doc["content"][0])
+                self.assertEqual(node["type"], node_type)
+                self.assertEqual(node["attrs"]["localId"], "card-1")
+                self._round_trips(doc)
+
+
+class TestParagraphMarks(unittest.TestCase):
+    """alignment and indentation, the editor's centre/indent toggles - node
+    marks on a paragraph, not attrs, and not something any named renderer
+    in this converter modelled before this task.
+    """
+
+    def test_alignment_round_trips(self):
+        doc = html_to_adf('<p data-align="center">Centred.</p>')
+        self.assertEqual(
+            doc["content"][0]["marks"],
+            [{"type": "alignment", "attrs": {"align": "center"}}],
+        )
+        ok, differing_type = check_roundtrip(doc)
+        self.assertTrue(ok, differing_type)
+
+    def test_indentation_round_trips(self):
+        doc = html_to_adf('<p data-indent-level="2">Indented.</p>')
+        self.assertEqual(
+            doc["content"][0]["marks"],
+            [{"type": "indentation", "attrs": {"level": 2}}],
+        )
+        ok, differing_type = check_roundtrip(doc)
+        self.assertTrue(ok, differing_type)
+
+    def test_a_plain_paragraph_gains_no_marks_key(self):
+        # The omission side of the same fix: a paragraph with neither
+        # attribute must not gain an empty "marks" key nothing in this
+        # converter would ever have put there natively.
+        doc = html_to_adf("<p>Plain.</p>")
+        self.assertNotIn("marks", doc["content"][0])
+        self.assertNotIn("attrs", doc["content"][0])
+
+
+class TestOrderedListStart(unittest.TestCase):
+    """orderedList's order attr, carried through the plain HTML start=
+    attribute rather than a data-* one - the list's start number is exactly
+    what start already means, and an author might reasonably set it by
+    hand, unlike a localId.
+    """
+
+    def test_start_becomes_order(self):
+        doc = html_to_adf('<ol start="5"><li><p>five</p></li></ol>')
+        self.assertEqual(doc["content"][0]["attrs"], {"order": 5})
+        ok, differing_type = check_roundtrip(doc)
+        self.assertTrue(ok, differing_type)
+        self.assertIn('start="5"', adf_to_html(doc))
+
+    def test_no_start_means_no_order_key(self):
+        doc = html_to_adf("<ol><li><p>one</p></li></ol>")
+        self.assertNotIn("attrs", doc["content"][0])
+
+
+class TestBreakout(unittest.TestCase):
+    """breakout - the editor's "make this wide" toggle - as a node mark on
+    codeBlock, expand and layoutSection, a live-site measurement found on
+    all three. Not modelled at all before this task: adf_to_html only ever
+    read a node's "attrs" and "content", never its own "marks" key, so a
+    breakout mark was silently dropped on every fetch of a page that had
+    one - and check_roundtrip could not have caught it either, since
+    dropping the mark on the way to HTML+ meant there was nothing left for
+    the reverse parse to disagree with.
+    """
+
+    def test_code_block_breakout_round_trips(self):
+        doc = html_to_adf(
+            '<pre data-breakout-mode="wide" data-breakout-width="1800">'
+            "<code>x = 1</code></pre>"
+        )
+        node = doc["content"][0]
+        self.assertEqual(
+            node["marks"],
+            [{"type": "breakout", "attrs": {"mode": "wide", "width": 1800}}],
+        )
+        ok, differing_type = check_roundtrip(doc)
+        self.assertTrue(ok, differing_type)
+
+    def test_expand_breakout_round_trips(self):
+        doc = html_to_adf(
+            '<details data-breakout-mode="full-width">'
+            "<summary>s</summary><p>x</p></details>"
+        )
+        self.assertEqual(
+            doc["content"][0]["marks"],
+            [{"type": "breakout", "attrs": {"mode": "full-width"}}],
+        )
+        ok, differing_type = check_roundtrip(doc)
+        self.assertTrue(ok, differing_type)
+
+    def test_layout_section_breakout_round_trips(self):
+        doc = html_to_adf(
+            '<section data-type="layout-two-equal" data-breakout-mode="wide">'
+            '<div data-type="column"><p>L</p></div>'
+            '<div data-type="column"><p>R</p></div></section>'
+        )
+        self.assertEqual(
+            doc["content"][0]["marks"],
+            [{"type": "breakout", "attrs": {"mode": "wide"}}],
+        )
+        ok, differing_type = check_roundtrip(doc)
+        self.assertTrue(ok, differing_type)
+
+    def test_breakout_without_width_omits_the_key(self):
+        # mode is the only always-present part; width is only there for a
+        # dragged-to-a-custom-size "wide" block, not "full-width".
+        doc = html_to_adf(
+            '<pre data-breakout-mode="full-width"><code>x</code></pre>'
+        )
+        self.assertNotIn("width", doc["content"][0]["marks"][0]["attrs"])
+
+
+class TestCustomPanel(unittest.TestCase):
+    """panelType "custom" - Confluence's emoji-and-colour panel - a real
+    shape a live-site measurement found and this converter used to refuse
+    outright, both when hand-authored and, more seriously, inside
+    check_roundtrip's own internal conversion of an ordinary fetched page.
+    """
+
+    def test_custom_panel_round_trips(self):
+        doc = html_to_adf(
+            '<div data-type="panel-custom" data-panel-icon-id="atlassian-bulb" '
+            'data-panel-icon=":bulb:" data-panel-icon-text=":bulb:" '
+            'data-panel-color="#E6FCFF"><p>Note.</p></div>'
+        )
+        attrs = doc["content"][0]["attrs"]
+        self.assertEqual(attrs["panelType"], "custom")
+        self.assertEqual(attrs["panelIconId"], "atlassian-bulb")
+        self.assertEqual(attrs["panelColor"], "#E6FCFF")
+        ok, differing_type = check_roundtrip(doc)
+        self.assertTrue(ok, differing_type)
+        self.assertEqual(html_to_adf(adf_to_html(doc)), doc)
+
+    def test_check_roundtrip_no_longer_raises_on_a_custom_panel(self):
+        # The exact failure this closes: adf_to_html wrote
+        # data-type="panel-custom" with no validation on the way out, and
+        # html_to_adf refused it on the way back in - check_roundtrip
+        # raising ConversionError instead of returning (False, "panel"),
+        # the one shape of gate failure that reached a caller as a raw
+        # traceback rather than a refusal it could act on.
+        doc = {
+            "type": "doc", "version": 1,
+            "content": [
+                {"type": "panel",
+                 "attrs": {"panelType": "custom", "panelIconId": "atlassian-warning",
+                           "panelIcon": ":warning:", "panelColor": "#FFF0B3"},
+                 "content": [{"type": "paragraph",
+                              "content": [{"type": "text", "text": "x"}]}]},
+            ],
+        }
+        ok, differing_type = check_roundtrip(doc)
+        self.assertTrue(ok, differing_type)
+
+
+class TestLayoutColumnWidth(unittest.TestCase):
+    """layoutColumn's own width, read back from data-width rather than
+    always recomputed as an even split of the layout's column count - a
+    live-site measurement found real columns dragged to an uneven split
+    (66.66/33.33), which the even-split assumption silently overwrote on
+    every fetch.
+    """
+
+    def test_uneven_split_round_trips(self):
+        doc = html_to_adf(
+            '<section data-type="layout-two-equal">'
+            '<div data-type="column" data-width="66.66"><p>L</p></div>'
+            '<div data-type="column" data-width="33.33"><p>R</p></div>'
+            "</section>"
+        )
+        columns = doc["content"][0]["content"]
+        self.assertEqual(columns[0]["attrs"]["width"], 66.66)
+        self.assertEqual(columns[1]["attrs"]["width"], 33.33)
+        ok, differing_type = check_roundtrip(doc)
+        self.assertTrue(ok, differing_type)
+
+    def test_no_width_given_still_computes_the_even_split(self):
+        # The pre-existing fresh-authoring convenience, unaffected: with
+        # nothing else to go on, a hand-authored two-column layout still
+        # gets an even 50/50 rather than refusing for want of data-width.
+        doc = html_to_adf(
+            '<section data-type="layout-two-equal">'
+            '<div data-type="column"><p>L</p></div>'
+            '<div data-type="column"><p>R</p></div></section>'
+        )
+        columns = doc["content"][0]["content"]
+        self.assertEqual(columns[0]["attrs"]["width"], 50.0)
+        self.assertEqual(columns[1]["attrs"]["width"], 50.0)
+
+
+class TestTableColspanRowspanTracking(unittest.TestCase):
+    """The column-index tracking rewrite behind the "2 errors" this task
+    was asked to investigate.
+
+    Before this fix, the column a cell was recorded against was a naive
+    count of <td>/<th> tags actually seen in its own row - which is wrong
+    the moment an earlier row's rowspan removes a cell from a later row,
+    the ordinary shape of a vertically merged column. That misattribution
+    surfaced as a false "two different data-colwidth values" refusal on a
+    real, internally consistent table (Error 1 of 2 found measuring this
+    converter against a live site) - not a hypothetical, reproduced below
+    with an invented table of the same shape.
+
+    The second half of the same gap: colwidth is one value per column a
+    cell spans, comma separated when colspan > 1 - real ADF carries an
+    array here. Rendering only the first value, as an earlier version of
+    this converter did, silently truncated every wider table's
+    merged-cell columns on the way out and failed the round-trip gate on
+    the way back in.
+    """
+
+    def test_a_rowspan_cell_does_not_falsely_conflict_with_the_next_row(self):
+        # Column 0 is genuinely 150 throughout: a rowspan=2 cell covers
+        # rows 1-2, then row 3's first real cell is column 1, not column 0 -
+        # exactly the shape the naive per-row tag count got wrong.
+        fragment = (
+            "<table><tbody>"
+            '<tr><td data-colwidth="150" rowspan="2"><p>A</p></td>'
+            '<td data-colwidth="200"><p>B1</p></td></tr>'
+            '<tr><td data-colwidth="200"><p>B2</p></td></tr>'
+            "</tbody></table>"
+        )
+        doc = html_to_adf(fragment)  # must not raise
+        rows = doc["content"][0]["content"]
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(len(rows[0]["content"]), 2)
+        self.assertEqual(len(rows[1]["content"]), 1)
+        ok, differing_type = check_roundtrip(doc)
+        self.assertTrue(ok, differing_type)
+
+    def test_a_genuine_conflict_is_still_caught(self):
+        # The rewrite must not have loosened the check itself - a column
+        # that really does carry two different widths, with no rowspan
+        # involved at all, is still rejected exactly as before.
+        with self.assertRaises(ConversionError) as cm:
+            html_to_adf(
+                '<table><tbody><tr><td data-colwidth="150"><p>a</p></td></tr>'
+                '<tr><td data-colwidth="200"><p>b</p></td></tr></tbody></table>'
+            )
+        self.assertIn("column 1", str(cm.exception))
+
+    def test_colspan_cell_carries_one_colwidth_per_spanned_column(self):
+        fragment = (
+            "<table><tbody>"
+            '<tr><td data-colwidth="150,200,300" colspan="3"><p>wide</p></td></tr>'
+            '<tr><td data-colwidth="150"><p>a</p></td>'
+            '<td data-colwidth="200"><p>b</p></td>'
+            '<td data-colwidth="300"><p>c</p></td></tr>'
+            "</tbody></table>"
+        )
+        doc = html_to_adf(fragment)
+        wide_cell = doc["content"][0]["content"][0]["content"][0]
+        self.assertEqual(wide_cell["attrs"]["colwidth"], [150, 200, 300])
+        ok, differing_type = check_roundtrip(doc)
+        self.assertTrue(ok, differing_type)
+        self.assertIn('data-colwidth="150,200,300"', adf_to_html(doc))
+
+    def test_a_null_colwidth_entry_falls_back_to_opaque_not_a_crash(self):
+        # Real ADF allows a null entry in colwidth (an indeterminate column
+        # inside a colspanned cell) - never seen on a live-measured site,
+        # but not a shape a plain-number HTML attribute can carry either.
+        # Falls back to the same opaque passthrough an unrecognised node
+        # gets, rather than writing the Python string "None" into
+        # data-colwidth, which _parse_plain_number could never read back.
+        doc = {
+            "type": "doc", "version": 1,
+            # table and tableCell always carry an "attrs" key, even empty -
+            # pre-existing, unrelated to this fix (unlike taskList/caption,
+            # which omit the key entirely when they hold nothing).
+            "content": [
+                {"type": "table", "attrs": {}, "content": [
+                    {"type": "tableRow", "content": [
+                        {"type": "tableCell",
+                         "attrs": {"colspan": 2, "colwidth": [150, None]},
+                         "content": [{"type": "paragraph",
+                                      "content": [{"type": "text", "text": "x"}]}]},
+                    ]},
+                ]},
+            ],
+        }
+        html = adf_to_html(doc)
+        self.assertIn('data-type="adf-opaque"', html)
+        self.assertEqual(html_to_adf(html), doc)
+
+
+class TestUniversalOpaqueFallback(unittest.TestCase):
+    """Rule 2, generalised: a handful of named types beyond panel (already
+    covered by TestOpaquePassthrough.test_4b), proving the same dispatch
+    gate closes the silent-drop gap everywhere it applies, not just where
+    the occurrenceKey review finding happened to land.
+    """
+
+    def test_table_with_an_unmodelled_attr_falls_back_to_opaque(self):
+        doc = {
+            "type": "doc", "version": 1,
+            "content": [
+                {"type": "table", "attrs": {"width": 400, "futureAttr": "x"},
+                 "content": [
+                     {"type": "tableRow", "content": [
+                         {"type": "tableCell", "content": [
+                             {"type": "paragraph",
+                              "content": [{"type": "text", "text": "x"}]},
+                         ]},
+                     ]},
+                 ]},
+            ],
+        }
+        ok, differing_type = check_roundtrip(doc)
+        self.assertTrue(ok, differing_type)
+        self.assertIn('data-type="adf-opaque"', adf_to_html(doc))
+
+    def test_code_block_with_an_unmodelled_attr_falls_back_to_opaque(self):
+        doc = {
+            "type": "doc", "version": 1,
+            "content": [
+                {"type": "codeBlock", "attrs": {"language": "json", "futureAttr": "x"},
+                 "content": [{"type": "text", "text": "{}"}]},
+            ],
+        }
+        ok, differing_type = check_roundtrip(doc)
+        self.assertTrue(ok, differing_type)
+        self.assertIn('data-type="adf-opaque"', adf_to_html(doc))
+
+    def test_heading_with_an_unmodelled_mark_falls_back_to_opaque(self):
+        # A node-level mark this converter has chosen not to model for
+        # heading (alignment/indentation are only modelled on paragraph) -
+        # proving the mark half of the gate, not just the attrs half.
+        doc = {
+            "type": "doc", "version": 1,
+            "content": [
+                {"type": "heading", "attrs": {"level": 2},
+                 "marks": [{"type": "alignment", "attrs": {"align": "center"}}],
+                 "content": [{"type": "text", "text": "Centred heading"}]},
+            ],
+        }
+        ok, differing_type = check_roundtrip(doc)
+        self.assertTrue(ok, differing_type)
+        self.assertIn('data-type="adf-opaque"', adf_to_html(doc))
 
 
 if __name__ == "__main__":

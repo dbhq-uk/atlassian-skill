@@ -37,7 +37,25 @@ HEADINGS = {"h1": 1, "h2": 2, "h3": 3, "h4": 4, "h5": 5, "h6": 6}
 # A body is a fragment. These tags mean somebody handed over a whole document.
 FORBIDDEN_WRAPPERS = {"html", "head", "body"}
 
-PANEL_TYPES = {"info", "note", "success", "warning", "error"}
+# "custom" joined the fixed five after a live-site measurement found real
+# panels with panelType="custom" - Confluence's own emoji-and-colour panel,
+# carrying panelIconId/panelIcon/panelIconText/panelColor alongside it. Before
+# this, a fetched page with one raised inside check_roundtrip's own internal
+# conversion (adf_to_html wrote data-type="panel-custom" verbatim with no
+# validation on the way out; html_to_adf then refused it on the way back in,
+# since "custom" was not a member here) rather than returning the ordinary
+# (False, "panel") the gate is meant to hand back for anything it cannot
+# carry - the one shape of failure that reached a caller as a raw
+# ConversionError out of check_roundtrip instead of a refusal it could act on.
+PANEL_TYPES = {"info", "note", "success", "warning", "error", "custom"}
+
+# The extra attrs a custom panel carries, beyond the panelType every panel
+# has. Confluence assigns panelIconId/panelIcon/panelColor together as a set
+# (an editor pick: the emoji and the background colour); panelIconText is
+# optional even then - a live-site measurement found it on some custom
+# panels and not others; see the panel branches in _Builder.handle_starttag
+# and _node_to_html.
+_CUSTOM_PANEL_ATTRS = {"panelIconId", "panelIcon", "panelIconText", "panelColor"}
 STATUS_COLOURS = {"neutral", "purple", "blue", "red", "yellow", "green"}
 DECISION_STATES = {"DECIDED", "UNDECIDED"}
 CARD_TYPES = {"inline": "inlineCard", "block": "blockCard", "embed": "embedCard"}
@@ -255,6 +273,48 @@ def _parse_plain_number(raw, attr_name):
     return int(raw)
 
 
+def _breakout_marks(a):
+    """A one-element marks list for a node's optional breakout mode/width,
+    read back from data-breakout-mode/data-breakout-width - or [] when the
+    element carries neither, so a caller can splice this straight onto a
+    fresh node's "marks" key without inventing one nothing needs.
+
+    breakout is a live-site-measured node mark (not an attrs entry) found on
+    codeBlock, expand and layoutSection alike - the editor's "make this wide"
+    toggle. Shared by all three callers rather than three separate
+    near-duplicates, since the shape (mode, an optional pixel width) is the
+    same wherever it appears.
+    """
+    if "data-breakout-mode" not in a:
+        return []
+    mark = {"type": "breakout", "attrs": {"mode": a["data-breakout-mode"]}}
+    if "data-breakout-width" in a:
+        mark["attrs"]["width"] = _parse_plain_number(
+            a["data-breakout-width"], "data-breakout-width"
+        )
+    return [mark]
+
+
+def _paragraph_marks(a):
+    """A paragraph's optional alignment/indentation node marks, read back
+    from data-align/data-indent-level - the editor's centre/indent toggles,
+    a live-site measurement found on a real minority of paragraphs (roughly
+    one in fifty, against one in three for localId alone). Returns [] when
+    the element carries neither.
+    """
+    marks = []
+    if "data-align" in a:
+        marks.append({"type": "alignment", "attrs": {"align": a["data-align"]}})
+    if "data-indent-level" in a:
+        marks.append({
+            "type": "indentation",
+            "attrs": {"level": _parse_plain_number(
+                a["data-indent-level"], "data-indent-level"
+            )},
+        })
+    return marks
+
+
 def _decode_adf(payload):
     """The exact node or mark an opaque HTML+ element's data-adf carried.
 
@@ -307,11 +367,16 @@ class _Builder(HTMLParser):
         self._in_time = False
         self._in_card = False
         # One frame per currently-open <table>, innermost last. Each frame is
-        # {"cell_index": int, "widths": {column index: set of widths seen}},
-        # where None in a widths set means "no attribute". Scoped per table
-        # rather than one flat pair of attributes, so a table nested inside
-        # another table's cell tracks its own columns without corrupting or
-        # being corrupted by the columns of the table it sits in.
+        # {"next_col": int, "occupied": {column index: rows still covered},
+        # "carried_over": {column indices occupied before the open row},
+        # "widths": {column index: set of widths seen}}, where None in a
+        # widths set means "no attribute" - see the "table"/"tr"/"th"/"td"
+        # branches of handle_starttag and handle_endtag for how next_col and
+        # occupied track the real grid column under colspan/rowspan, not
+        # just the count of <td>/<th> tags seen. Scoped per table rather
+        # than one flat set of attributes, so a table nested inside another
+        # table's cell tracks its own columns without corrupting or being
+        # corrupted by the columns of the table it sits in.
         self._table_stack = []
         # Tag names of currently-open opaque (non-mark) elements, innermost
         # last. Everything the node carries already travelled in its
@@ -477,16 +542,40 @@ class _Builder(HTMLParser):
             )
 
         if tag == "p":
-            self._open({"type": "paragraph"})
+            # localId, alignment and indentation are all round-trip
+            # bookkeeping-or-formatting a live-site measurement found on a
+            # third of real paragraphs (localId) and a smaller but real
+            # share (the two marks, the editor's centre/indent toggles) -
+            # carried the same way media's localId already is, so a page
+            # with either is still a real, editable <p> rather than an
+            # opaque blob. None is invented when hand-authoring a fresh
+            # paragraph: leave them off and either Confluence assigns its
+            # own id, or there is simply no alignment/indent to have.
+            node = {"type": "paragraph"}
+            if "data-local-id" in a:
+                node["attrs"] = {"localId": a["data-local-id"]}
+            marks = _paragraph_marks(a)
+            if marks:
+                node["marks"] = marks
+            self._open(node)
         elif tag in HEADINGS:
-            self._open({"type": "heading", "attrs": {"level": HEADINGS[tag]}})
+            attrs = {"level": HEADINGS[tag]}
+            if "data-local-id" in a:
+                attrs["localId"] = a["data-local-id"]
+            self._open({"type": "heading", "attrs": attrs})
         elif tag == "code" and self.blocks[-1]["type"] == "codeBlock":
             # Inside a <pre>, <code> carries the language rather than an
             # inline mark - checked ahead of the generic INLINE_MARKS branch
             # below, which would otherwise claim "code" first every time.
+            # setdefault, not a bare [...] assignment: <pre> no longer
+            # always creates an "attrs" key (see its own branch below), so
+            # a codeBlock with a language class but no localId/breakout
+            # reaches here with none yet.
             for cls in a.get("class", "").split():
                 if cls.startswith("language-"):
-                    self.blocks[-1]["attrs"]["language"] = cls[len("language-"):]
+                    self.blocks[-1].setdefault("attrs", {})["language"] = (
+                        cls[len("language-"):]
+                    )
         elif tag in INLINE_MARKS:
             mark = {"type": INLINE_MARKS[tag]}
             if tag in ("sub", "sup"):
@@ -511,7 +600,22 @@ class _Builder(HTMLParser):
                     f'data-type="{dtype}" is not a panel. '
                     f"Use one of: {', '.join(sorted(PANEL_TYPES))}."
                 )
-            self._open({"type": "panel", "attrs": {"panelType": kind}})
+            attrs = {"panelType": kind}
+            if "data-local-id" in a:
+                attrs["localId"] = a["data-local-id"]
+            # The custom-panel attrs (icon id, icon, icon text, colour) are
+            # an editor pick, round-trip bookkeeping the same as a media id -
+            # not something to invent when hand-authoring a plain panel, so
+            # each is carried only when the source actually has it.
+            if "data-panel-icon-id" in a:
+                attrs["panelIconId"] = a["data-panel-icon-id"]
+            if "data-panel-icon" in a:
+                attrs["panelIcon"] = a["data-panel-icon"]
+            if "data-panel-icon-text" in a:
+                attrs["panelIconText"] = a["data-panel-icon-text"]
+            if "data-panel-color" in a:
+                attrs["panelColor"] = a["data-panel-color"]
+            self._open({"type": "panel", "attrs": attrs})
 
         elif tag == "span" and dtype == "status":
             colour = a.get("data-color", "neutral")
@@ -525,6 +629,8 @@ class _Builder(HTMLParser):
                 "type": "status",
                 "attrs": {"text": "", "color": colour},
             }
+            if "data-local-id" in a:
+                self._pending_status["attrs"]["localId"] = a["data-local-id"]
             self._append(self._pending_status)
 
         elif tag == "ul" and dtype == "task-list":
@@ -600,18 +706,41 @@ class _Builder(HTMLParser):
             self._open({"type": "decisionItem", "attrs": attrs})
 
         elif tag == "details":
-            self._open({"type": "expand", "attrs": {"title": ""}})
+            attrs = {"title": ""}
+            if "data-local-id" in a:
+                attrs["localId"] = a["data-local-id"]
+            node = {"type": "expand", "attrs": attrs}
+            marks = _breakout_marks(a)
+            if marks:
+                node["marks"] = marks
+            self._open(node)
         elif tag == "summary":
             self._in_summary = True
 
         elif tag == "pre":
-            self._open({"type": "codeBlock", "attrs": {"language": "plaintext"}})
+            # No "language" default here any more - a live-site measurement
+            # found real codeBlocks never carry one at all (0 of 49 sampled;
+            # 28 had no "attrs" key whatsoever). The <code class=
+            # "language-..."> branch above fills it in when a language is
+            # actually given; without one, this omits the key exactly the
+            # way Confluence's own editor does for an unlabelled block,
+            # rather than inventing "plaintext" as if it had been chosen.
+            node = {"type": "codeBlock"}
+            attrs = {}
+            if "data-local-id" in a:
+                attrs["localId"] = a["data-local-id"]
+            if attrs:
+                node["attrs"] = attrs
+            marks = _breakout_marks(a)
+            if marks:
+                node["marks"] = marks
+            self._open(node)
 
         elif tag == "time":
-            self._append({
-                "type": "date",
-                "attrs": {"timestamp": _date_to_timestamp(a.get("datetime", ""))},
-            })
+            attrs = {"timestamp": _date_to_timestamp(a.get("datetime", ""))}
+            if "data-local-id" in a:
+                attrs["localId"] = a["data-local-id"]
+            self._append({"type": "date", "attrs": attrs})
             self._in_time = True
 
         elif tag == "a":
@@ -627,25 +756,65 @@ class _Builder(HTMLParser):
                 # forced to the document root. A card left where its author
                 # put it is what _check_nesting can actually rule on; moving
                 # it to the root silently relocates their content instead.
-                node = {"type": CARD_TYPES[appearance], "attrs": {"url": href}}
+                attrs = {"url": href}
+                if "data-local-id" in a:
+                    attrs["localId"] = a["data-local-id"]
+                node = {"type": CARD_TYPES[appearance], "attrs": attrs}
                 self._append(node)
                 self._in_card = True
             else:
                 self.marks.append({"type": "link", "attrs": {"href": href}})
 
         elif tag == "section" and dtype in LAYOUTS:
-            self._open({"type": "layoutSection", "_expected": LAYOUTS[dtype],
-                        "_layout": dtype})
+            node = {"type": "layoutSection", "_expected": LAYOUTS[dtype],
+                    "_layout": dtype}
+            marks = _breakout_marks(a)
+            if marks:
+                node["marks"] = marks
+            self._open(node)
         elif tag == "div" and dtype == "column":
+            # An even split is the fresh-authoring default (the shape this
+            # converter has always produced with nothing else to go on),
+            # but a real column's width is not always even - a live-site
+            # measurement found columns dragged to 66.66/33.33, not just
+            # 50/50 - so an explicit data-width is read back verbatim
+            # rather than the even split always overriding whatever the
+            # source actually had. width is the "content" a reader drags
+            # the column divider to set, exactly the shape an ordered
+            # list's start number or a code block's language already are:
+            # worth carrying by hand, not just round-trip bookkeeping.
             parent = self.blocks[-1]
-            width = round(100.0 / parent.get("_expected", 1), 2)
+            if "data-width" in a:
+                width = _parse_float(a["data-width"], "data-width")
+            else:
+                width = round(100.0 / parent.get("_expected", 1), 2)
             self._open({"type": "layoutColumn", "attrs": {"width": width}})
 
         elif tag == "hr":
-            self._append({"type": "rule"})
+            node = {"type": "rule"}
+            if "data-local-id" in a:
+                node["attrs"] = {"localId": a["data-local-id"]}
+            self._append(node)
 
         elif tag in SIMPLE_BLOCKS:
-            self._open({"type": SIMPLE_BLOCKS[tag]})
+            # bulletList, orderedList, listItem and blockquote all carry a
+            # localId on a fetched page (a live-site measurement: common on
+            # every one of the four), so all four take it the same
+            # conditional way as taskList/decisionList already do. order is
+            # orderedList's own: the number the list starts counting from,
+            # read back from the plain HTML "start" attribute rather than a
+            # data-* one, since it is exactly HTML's own start="N" and an
+            # author might reasonably set it by hand - unlike a localId,
+            # nobody hand-authors.
+            node = {"type": SIMPLE_BLOCKS[tag]}
+            attrs = {}
+            if "data-local-id" in a:
+                attrs["localId"] = a["data-local-id"]
+            if tag == "ol" and "start" in a:
+                attrs["order"] = _parse_plain_number(a["start"], "start")
+            if attrs:
+                node["attrs"] = attrs
+            self._open(node)
 
         elif tag == "table":
             attrs_out = {}
@@ -657,8 +826,24 @@ class _Builder(HTMLParser):
                 attrs_out["isNumberColumnEnabled"] = True
             if a.get("data-display-mode"):
                 attrs_out["displayMode"] = a["data-display-mode"]
+            if "data-local-id" in a:
+                attrs_out["localId"] = a["data-local-id"]
             self._open({"type": "table", "attrs": attrs_out})
-            self._table_stack.append({"cell_index": 0, "widths": {}})
+            # next_col: the column cursor for the row currently being
+            # parsed, reset at each <tr>. occupied: column index -> number
+            # of further rows, beyond the row a rowspan started in, that
+            # column is still covered - the grid-tracking state a naive
+            # per-<td> counter does not have, and needs to, because a
+            # rowspan removes a cell from every row after the one it opened
+            # in. carried_over: the subset of occupied's keys that predate
+            # the row currently open - see the <tr> open/close handling
+            # below for why only that subset gets decremented once the row
+            # ends, not every column occupied[col] happened to gain during
+            # it.
+            self._table_stack.append({
+                "next_col": 0, "occupied": {}, "carried_over": set(),
+                "widths": {},
+            })
         elif tag in ("thead", "tbody", "tfoot"):
             # Not ADF nodes. Rows sit directly on the table.
             pass
@@ -668,8 +853,17 @@ class _Builder(HTMLParser):
                     "<tr> found outside a <table>. A row must sit inside a "
                     "table."
                 )
-            self._open({"type": "tableRow"})
-            self._table_stack[-1]["cell_index"] = 0
+            node = {"type": "tableRow"}
+            if "data-local-id" in a:
+                node["attrs"] = {"localId": a["data-local-id"]}
+            self._open(node)
+            frame = self._table_stack[-1]
+            frame["next_col"] = 0
+            # Snapshot which columns are occupied by a rowspan that started
+            # in an earlier row, before this row's own cells can add any
+            # more - see the </tr> handling in handle_endtag, which
+            # decrements only these, not the whole occupied dict.
+            frame["carried_over"] = set(frame["occupied"])
         elif tag in ("th", "td"):
             if not self._table_stack:
                 raise ConversionError(
@@ -677,16 +871,57 @@ class _Builder(HTMLParser):
                     f"inside a table."
                 )
             node_type = "tableHeader" if tag == "th" else "tableCell"
-            cell_attrs = {}
-            raw = a.get("data-colwidth")
-            if raw is not None:
-                cell_attrs["colwidth"] = [_parse_plain_number(raw, "data-colwidth")]
-            for key, attr in (("colspan", "colspan"), ("rowspan", "rowspan")):
-                if key in a:
-                    cell_attrs[attr] = _parse_plain_number(a[key], key)
             frame = self._table_stack[-1]
-            self._record_width(frame["cell_index"], raw)
-            frame["cell_index"] += 1
+
+            cell_attrs = {}
+            colspan = 1
+            if "colspan" in a:
+                colspan = _parse_plain_number(a["colspan"], "colspan")
+                cell_attrs["colspan"] = colspan
+            rowspan = 1
+            if "rowspan" in a:
+                rowspan = _parse_plain_number(a["rowspan"], "rowspan")
+                cell_attrs["rowspan"] = rowspan
+
+            # The real grid column this cell starts at - skipping past any
+            # column an earlier row's rowspan still covers. A naive count of
+            # <td>/<th> tags actually seen in this row (what an earlier
+            # version of this converter did) puts the wrong column index on
+            # every cell after the first gap a rowspan leaves, and that
+            # misattribution is what made _check_column_widths see two
+            # different widths on what was really one consistent column -
+            # a real table with a vertically merged cell, refused with a
+            # false "two different data-colwidth values" - proven against a
+            # live site, not a hypothetical.
+            while frame["occupied"].get(frame["next_col"], 0) > 0:
+                frame["next_col"] += 1
+            col_index = frame["next_col"]
+
+            # colwidth is one value per column the cell spans, comma
+            # separated when colspan > 1 - real ADF carries an array here,
+            # one entry per spanned column, not a single number; rendering
+            # only the first (an earlier version of this converter did)
+            # silently truncated every wider table's merged-cell columns on
+            # the way out, failing the round-trip gate on the way back in.
+            raw = a.get("data-colwidth")
+            raw_values = raw.split(",") if raw is not None else None
+            if raw_values is not None:
+                cell_attrs["colwidth"] = [
+                    _parse_plain_number(v, "data-colwidth") for v in raw_values
+                ]
+            for i in range(colspan):
+                value = raw_values[i] if raw_values and i < len(raw_values) else None
+                self._record_width(col_index + i, value)
+
+            if rowspan > 1:
+                for i in range(colspan):
+                    frame["occupied"][col_index + i] = rowspan - 1
+            frame["next_col"] = col_index + colspan
+
+            if "data-local-id" in a:
+                cell_attrs["localId"] = a["data-local-id"]
+            if "data-background" in a:
+                cell_attrs["background"] = a["data-background"]
             self._open({"type": node_type, "attrs": cell_attrs})
 
         elif tag == "figure" and dtype == "media-single":
@@ -857,6 +1092,22 @@ class _Builder(HTMLParser):
         elif tag in ("thead", "tbody", "tfoot"):
             pass
         elif tag in ("tr", "th", "td"):
+            if tag == "tr" and self._table_stack:
+                # One row consumed: every column that was already occupied
+                # before this row's own cells were placed (carried_over, set
+                # at <tr> open) has one fewer future row left to cover - not
+                # every column in occupied, which by now may also hold
+                # entries a rowspan starting in THIS row just added, and
+                # those must survive untouched into the row after this one,
+                # not be consumed by the row that created them.
+                frame = self._table_stack[-1]
+                for col in frame["carried_over"]:
+                    remaining = frame["occupied"].get(col)
+                    if remaining is not None:
+                        if remaining <= 1:
+                            del frame["occupied"][col]
+                        else:
+                            frame["occupied"][col] = remaining - 1
             self._close()
 
     def handle_data(self, data):
@@ -1022,6 +1273,87 @@ _MEDIA_ATTRS = {"id", "type", "collection", "alt", "width", "height", "localId"}
 _CAPTION_ATTRS = {"localId"}
 
 
+def _fully_modelled(node, known_attrs, known_marks=frozenset()):
+    """Whether every attrs key and every node-level mark on this node is one
+    its named HTML+ renderer actually represents.
+
+    Generalises the completeness check above (built for
+    mediaSingle/media/caption alone, after the occurrenceKey finding) to
+    every other named node type this converter renders: a live-site
+    measurement of a real Confluence site found localId alone on eleven more
+    node types than the six that already carried it, plus background on
+    table cells, order on orderedList, and a breakout node mark on
+    codeBlock/expand/layoutSection - none representable before this. Rather
+    than enumerate each one's presence or absence as it comes up, every
+    named renderer now states what it models and defers to the same rule:
+    known attrs and marks render named; anything else - today's gap or a
+    future ADF revision's - degrades to the opaque blob a wholly
+    unrecognised type already gets, never a silent, partial drop. See
+    _NODE_ATTRS_MARKS and _INLINE_ATTRS_MARKS, its two callers.
+    """
+    a = node.get("attrs", {})
+    if not set(a) <= known_attrs:
+        return False
+    for mark in node.get("marks") or ():
+        if mark.get("type") not in known_marks:
+            return False
+    return True
+
+
+# Per named block-level (or block-position leaf) node type, the attrs keys
+# and node-level marks _node_to_html's matching branch actually renders.
+# Read by _node_to_html's own dispatch, ahead of every branch below it: a
+# node whose type is a key here but whose attrs or marks are not a subset of
+# its entry is not fully representable, so it renders as opaque instead of
+# through its named branch, which would otherwise silently drop whatever it
+# does not model. A type with no entry here is unconditionally opaque -
+# there being no named branch for it at all is exactly the state this
+# converter is already in for mention, emoji, extension and the rest.
+_NODE_ATTRS_MARKS = {
+    "paragraph": ({"localId"}, {"alignment", "indentation"}),
+    "heading": ({"level", "localId"}, frozenset()),
+    "panel": ({"panelType", "localId"} | _CUSTOM_PANEL_ATTRS, frozenset()),
+    "expand": ({"title", "localId"}, {"breakout"}),
+    "codeBlock": ({"language", "localId"}, {"breakout"}),
+    "taskList": ({"localId"}, frozenset()),
+    "taskItem": ({"state", "localId"}, frozenset()),
+    "decisionList": ({"localId"}, frozenset()),
+    "decisionItem": ({"state", "localId"}, frozenset()),
+    "bulletList": ({"localId"}, frozenset()),
+    "orderedList": ({"localId", "order"}, frozenset()),
+    "listItem": ({"localId"}, frozenset()),
+    "blockquote": ({"localId"}, frozenset()),
+    "rule": ({"localId"}, frozenset()),
+    "table": ({"width", "layout", "isNumberColumnEnabled", "displayMode",
+               "localId"}, frozenset()),
+    "tableRow": ({"localId"}, frozenset()),
+    "tableCell": ({"colwidth", "colspan", "rowspan", "localId", "background"},
+                  frozenset()),
+    "tableHeader": ({"colwidth", "colspan", "rowspan", "localId", "background"},
+                     frozenset()),
+    "layoutSection": (frozenset(), {"breakout"}),
+    "layoutColumn": ({"width"}, frozenset()),
+    "blockCard": ({"url", "localId"}, frozenset()),
+    "embedCard": ({"url", "localId"}, frozenset()),
+    "mediaSingle": (_MEDIA_SINGLE_ATTRS, frozenset()),
+    "media": (_MEDIA_ATTRS, frozenset()),
+    "caption": (_CAPTION_ATTRS, frozenset()),
+}
+
+# The same table for the inline-position leaf types _inline_to_html renders
+# by name. text is not here: its marks are the pre-existing per-mark
+# opaque-passthrough mechanism (every recognised mark renders named, every
+# other wraps opaquely - see the "else" branch inside _inline_to_html's own
+# marks loop), a different and already-general mechanism from the
+# whole-node fallback this dict feeds.
+_INLINE_ATTRS_MARKS = {
+    "status": ({"text", "color", "localId"}, frozenset()),
+    "date": ({"timestamp", "localId"}, frozenset()),
+    "inlineCard": ({"url", "localId"}, frozenset()),
+    "hardBreak": (frozenset(), frozenset()),
+}
+
+
 def _escape(text):
     return (text.replace("&", "&amp;").replace("<", "&lt;")
                 .replace(">", "&gt;"))
@@ -1124,15 +1456,23 @@ def _inline_to_html(node):
                 # wrapped instead, the same as a known mark, just opaquely.
                 out = _opaque_mark_to_html(mark, out)
         return out
+    known = _INLINE_ATTRS_MARKS.get(t)
+    if known is not None and not _fully_modelled(node, *known):
+        return _opaque_to_html(node, tag="span")
     if t == "status":
         a = node["attrs"]
-        return (f'<span data-type="status" data-color="{a["color"]}">'
+        local_id = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        return (f'<span data-type="status" data-color="{a["color"]}"{local_id}>'
                 f'{_escape(a["text"])}</span>')
     if t == "date":
-        iso = _timestamp_to_iso(node["attrs"]["timestamp"])
-        return f'<time datetime="{iso}">{iso}</time>'
+        a = node["attrs"]
+        iso = _timestamp_to_iso(a["timestamp"])
+        local_id = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        return f'<time datetime="{iso}"{local_id}>{iso}</time>'
     if t == "inlineCard":
-        return f'<a href="{node["attrs"]["url"]}" data-card-appearance="inline"></a>'
+        a = node["attrs"]
+        local_id = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        return f'<a href="{a["url"]}" data-card-appearance="inline"{local_id}></a>'
     if t == "hardBreak":
         return "<br>"
     # Reached for any inline ADF node type this converter does not know how
@@ -1159,23 +1499,76 @@ def _inline_html(node):
     return "".join(_inline_to_html(c) for c in node.get("content", []))
 
 
+def _node_marks_html(node):
+    """A node's own breakout mark, if it has one, as an HTML+ attribute
+    fragment - "" when it has none. Shared by codeBlock, expand and
+    layoutSection, the three named block renderers that can carry one.
+    """
+    marks = node.get("marks") or []
+    for mark in marks:
+        if mark["type"] == "breakout":
+            bits = [f'data-breakout-mode="{mark["attrs"]["mode"]}"']
+            if "width" in mark["attrs"]:
+                bits.append(
+                    f'data-breakout-width="{_format_number(mark["attrs"]["width"])}"'
+                )
+            return " " + " ".join(bits)
+    return ""
+
+
 def _node_to_html(node):
     t = node.get("type")
     a = node.get("attrs", {})
+    known = _NODE_ATTRS_MARKS.get(t)
+    if known is not None and not _fully_modelled(node, *known):
+        return _opaque_to_html(node)
     if t == "paragraph":
-        return f"<p>{_inline_html(node)}</p>"
+        local_id = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        align = indent = ""
+        for mark in node.get("marks") or []:
+            if mark["type"] == "alignment":
+                align = f' data-align="{mark["attrs"]["align"]}"'
+            elif mark["type"] == "indentation":
+                indent = f' data-indent-level="{_format_number(mark["attrs"]["level"])}"'
+        return f"<p{local_id}{align}{indent}>{_inline_html(node)}</p>"
     if t == "heading":
         level = a["level"]
-        return f"<h{level}>{_inline_html(node)}</h{level}>"
+        local_id = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        return f"<h{level}{local_id}>{_inline_html(node)}</h{level}>"
     if t == "panel":
-        return f'<div data-type="panel-{a["panelType"]}">{_children_html(node)}</div>'
+        bits = []
+        if "localId" in a:
+            bits.append(f'data-local-id="{a["localId"]}"')
+        if "panelIconId" in a:
+            bits.append(f'data-panel-icon-id="{a["panelIconId"]}"')
+        if "panelIcon" in a:
+            bits.append(f'data-panel-icon="{a["panelIcon"]}"')
+        if "panelIconText" in a:
+            bits.append(f'data-panel-icon-text="{a["panelIconText"]}"')
+        if "panelColor" in a:
+            bits.append(f'data-panel-color="{a["panelColor"]}"')
+        extra = "" if not bits else " " + " ".join(bits)
+        return (f'<div data-type="panel-{a["panelType"]}"{extra}>'
+                f"{_children_html(node)}</div>")
     if t == "expand":
-        return (f'<details><summary>{_escape(a.get("title", ""))}</summary>'
+        local_id = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        breakout = _node_marks_html(node)
+        return (f'<details{local_id}{breakout}>'
+                f'<summary>{_escape(a.get("title", ""))}</summary>'
                 f"{_children_html(node)}</details>")
     if t == "codeBlock":
         text = "".join(c.get("text", "") for c in node.get("content", []))
-        lang = a.get("language", "plaintext")
-        return f'<pre><code class="language-{lang}">{_escape(text)}</code></pre>'
+        local_id = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        breakout = _node_marks_html(node)
+        # No class at all when the node carries no "language" - the real
+        # shape of an unlabelled block (see the html_to_adf side of this
+        # same fix). Defaulting to "language-plaintext" here, as an earlier
+        # version of this converter did, rendered every one of those as if
+        # "plaintext" had been chosen, which round-tripped back in as an
+        # attrs key the fetched page never had.
+        code_open = f'<code class="language-{a["language"]}">' if "language" in a \
+            else "<code>"
+        return f'<pre{local_id}{breakout}>{code_open}{_escape(text)}</code></pre>'
     if t == "taskList":
         # localId round-trips through data-local-id - see the html_to_adf
         # side for why dropping it used to fail check-roundtrip on every
@@ -1205,15 +1598,24 @@ def _node_to_html(node):
                 f"{local_id}>"
                 f"{_inline_html(node)}</li>")
     if t == "bulletList":
-        return f"<ul>{_children_html(node)}</ul>"
+        local_id = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        return f"<ul{local_id}>{_children_html(node)}</ul>"
     if t == "orderedList":
-        return f"<ol>{_children_html(node)}</ol>"
+        local_id = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        # order is HTML's own start="N" - the number the list starts
+        # counting from - not a data-* attribute, since it is exactly what
+        # start already means and an author might reasonably set it by hand.
+        start = f' start="{_format_number(a["order"])}"' if "order" in a else ""
+        return f"<ol{local_id}{start}>{_children_html(node)}</ol>"
     if t == "listItem":
-        return f"<li>{_children_html(node)}</li>"
+        local_id = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        return f"<li{local_id}>{_children_html(node)}</li>"
     if t == "blockquote":
-        return f"<blockquote>{_children_html(node)}</blockquote>"
+        local_id = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        return f"<blockquote{local_id}>{_children_html(node)}</blockquote>"
     if t == "rule":
-        return "<hr>"
+        local_id = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        return f"<hr{local_id}>"
     if t == "table":
         bits = []
         if "width" in a:
@@ -1224,30 +1626,65 @@ def _node_to_html(node):
             bits.append('data-number-column="true"')
         if "displayMode" in a:
             bits.append(f'data-display-mode="{a["displayMode"]}"')
+        if "localId" in a:
+            bits.append(f'data-local-id="{a["localId"]}"')
         open_tag = "<table" + ("" if not bits else " " + " ".join(bits)) + ">"
         return f"{open_tag}<tbody>{_children_html(node)}</tbody></table>"
     if t == "tableRow":
-        return f"<tr>{_children_html(node)}</tr>"
+        local_id = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        return f"<tr{local_id}>{_children_html(node)}</tr>"
     if t in ("tableCell", "tableHeader"):
+        # colwidth's values are checked for shape, not just its key's
+        # presence in _NODE_ATTRS_MARKS above (which only inspects attrs
+        # keys, not what is inside them): real ADF allows null entries for
+        # an indeterminate column inside a colspanned cell, never seen on a
+        # live-measured site but not something a plain-number HTML
+        # attribute can carry either. Falls back to opaque rather than
+        # writing the Python string "None" into data-colwidth, which
+        # _parse_plain_number could never read back.
+        colwidth = a.get("colwidth")
+        if colwidth is not None and not all(
+            isinstance(w, (int, float)) and not isinstance(w, bool)
+            for w in colwidth
+        ):
+            return _opaque_to_html(node)
         tag = "td" if t == "tableCell" else "th"
         bits = []
-        if "colwidth" in a:
-            bits.append(f'data-colwidth="{_format_number(a["colwidth"][0])}"')
+        if colwidth is not None:
+            # One value per spanned column, comma separated - see the
+            # matching split in handle_starttag's "th"/"td" branch. A
+            # colspan=1 cell (the overwhelming majority) still round-trips
+            # through the same one-element-list shape it always has.
+            bits.append(
+                'data-colwidth="' + ",".join(_format_number(w) for w in colwidth) + '"'
+            )
         for key in ("colspan", "rowspan"):
             if key in a:
                 bits.append(f'{key}="{_format_number(a[key])}"')
+        if "background" in a:
+            bits.append(f'data-background="{a["background"]}"')
+        if "localId" in a:
+            bits.append(f'data-local-id="{a["localId"]}"')
         open_tag = f"<{tag}" + ("" if not bits else " " + " ".join(bits)) + ">"
         return f"{open_tag}{_children_html(node)}</{tag}>"
     if t == "layoutSection":
         count = len(node.get("content", []))
         layout = _LAYOUT_BY_COUNT.get(count, "layout-two-equal")
-        return f'<section data-type="{layout}">{_children_html(node)}</section>'
+        breakout = _node_marks_html(node)
+        return (f'<section data-type="{layout}"{breakout}>'
+                f"{_children_html(node)}</section>")
     if t == "layoutColumn":
-        return f'<div data-type="column">{_children_html(node)}</div>'
+        # "width" is always present - html_to_adf never builds a
+        # layoutColumn without computing or reading one - so this is
+        # unconditional, not the usual "in a" guard the rest of this file
+        # uses for a genuinely optional key.
+        return (f'<div data-type="column" data-width="{_format_number(a["width"])}">'
+                f"{_children_html(node)}</div>")
     if t in ("blockCard", "embedCard"):
         appearance = "block" if t == "blockCard" else "embed"
-        return f'<a href="{a["url"]}" data-card-appearance="{appearance}"></a>'
-    if t == "mediaSingle" and set(a) <= _MEDIA_SINGLE_ATTRS:
+        local_id = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        return f'<a href="{a["url"]}" data-card-appearance="{appearance}"{local_id}></a>'
+    if t == "mediaSingle":
         bits = [f'data-layout="{a.get("layout", "center")}"']
         if "width" in a:
             bits.append(f'data-width="{_format_number(a["width"])}"')
@@ -1256,19 +1693,19 @@ def _node_to_html(node):
         return (f'<figure data-type="media-single" {" ".join(bits)}>'
                 f"{_children_html(node)}</figure>")
     if t == "media" and a.get("type", "file") == "file" \
-            and "id" in a and "collection" in a and set(a) <= _MEDIA_ATTRS:
+            and "id" in a and "collection" in a:
         # Named support only for the shape this converter can represent
         # completely: a file attachment with an id and a collection - what
-        # attachments.sh upload actually produces - and no attrs key
-        # outside _MEDIA_ATTRS (review finding on this task: a media node
-        # carrying occurrenceKey, a real ADF attribute this model does not
-        # cover, used to render named anyway and silently drop it). A media
-        # node of any other shape (external type with no id/collection, or
-        # any node carrying an attribute this model does not know) falls
-        # through to the opaque branch at the end of this function instead,
-        # the same as any other node this converter does not fully model -
-        # never a KeyError on a["id"], and never a narrower, lossy render of
-        # something this converter cannot round-trip completely.
+        # attachments.sh upload actually produces. The attrs-completeness
+        # half of that ("no key outside _MEDIA_ATTRS") is now the shared
+        # gate at the top of this function; what is left here is the
+        # required-keys-present check that gate does not do, since a media
+        # node can carry only attrs this converter models (type, id,
+        # collection - all in _MEDIA_ATTRS) and still not be the file shape
+        # this branch builds, if the id or collection Confluence sends
+        # simply is not there. A media node of any other shape (external
+        # type with no id/collection) falls through to the opaque branch at
+        # the end of this function instead - never a KeyError on a["id"].
         bits = [f'data-media-type="{a.get("type", "file")}"',
                 f'data-id="{a["id"]}"', f'data-collection="{a["collection"]}"']
         if "alt" in a:
@@ -1280,7 +1717,7 @@ def _node_to_html(node):
         if "localId" in a:
             bits.append(f'data-local-id="{a["localId"]}"')
         return f'<div data-type="media" {" ".join(bits)}></div>'
-    if t == "caption" and set(a) <= _CAPTION_ATTRS:
+    if t == "caption":
         bits = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
         return f"<figcaption{bits}>{_inline_html(node)}</figcaption>"
     if t in _INLINE_LEAF_TYPES:
