@@ -12,7 +12,7 @@ from htmlplus import ConversionError, html_to_adf  # noqa: E402
 from htmlplus import adf_to_html, adf_to_markdown  # noqa: E402
 from htmlplus import _opaque_to_html, _opaque_mark_to_html  # noqa: E402
 from htmlplus import check_roundtrip, _first_roundtrip_difference  # noqa: E402
-from htmlplus import html_to_adf_for_jira  # noqa: E402
+from htmlplus import html_to_adf_for_jira, CONFLUENCE_ONLY, _walk  # noqa: E402
 
 
 class TestDocumentEnvelope(unittest.TestCase):
@@ -1373,6 +1373,42 @@ class TestJiraProfile(unittest.TestCase):
         with self.assertRaises(ConversionError) as cm:
             html_to_adf_for_jira(opaque_div)
         self.assertIn("bodiedExtension", str(cm.exception))
+        self.assertIn("Jira", str(cm.exception))
+
+    def test_walk_visits_a_nodes_marks_not_just_its_content(self):
+        # Structural regression test for _walk itself, independent of what
+        # CONFLUENCE_ONLY currently holds. The first version of _walk only
+        # descended into "content", never into a text node's "marks" - so a
+        # mark's restored type (see _decode_adf and the ADF_OPAQUE_MARK
+        # branch) was reachable in the tree but invisible to this walk. A
+        # future addition to CONFLUENCE_ONLY would have silently never
+        # fired for a mark. annotation has no named HTML+ syntax in this
+        # converter (no INLINE_MARKS entry, no dedicated handle_starttag
+        # branch), so it can only ever arrive through the opaque wrapper -
+        # the same property bodiedExtension has among node types.
+        opaque_mark_span = _opaque_mark_to_html(
+            {"type": "annotation", "attrs": {"id": "1"}}, "flagged",
+        )
+        doc = html_to_adf_for_jira(f"<p>{opaque_mark_span}</p>")
+        types = {n.get("type") for n in _walk(doc)}
+        self.assertIn("annotation", types)
+
+    def test_a_mark_declared_confluence_only_is_refused_even_hidden_opaquely(self):
+        # CONFLUENCE_ONLY holds no mark type today - a mark only decorates
+        # already-visible text, so nothing here has ever produced the
+        # invisible-content failure a missing block node does. This proves
+        # the defence works end to end for the day one is added, rather
+        # than resting on the structural check above alone: with
+        # "annotation" declared refused, exactly the way it can only ever
+        # arrive (opaquely - see the previous test), it has to be caught.
+        CONFLUENCE_ONLY.add("annotation")
+        self.addCleanup(CONFLUENCE_ONLY.discard, "annotation")
+        opaque_mark_span = _opaque_mark_to_html(
+            {"type": "annotation", "attrs": {"id": "1"}}, "flagged",
+        )
+        with self.assertRaises(ConversionError) as cm:
+            html_to_adf_for_jira(f"<p>{opaque_mark_span}</p>")
+        self.assertIn("annotation", str(cm.exception))
         self.assertIn("Jira", str(cm.exception))
 
     def test_an_opaque_type_jira_can_render_still_passes(self):

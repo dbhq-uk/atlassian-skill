@@ -11,16 +11,16 @@ This skill **creates and reads only**. It has no delete, no bulk transition, and
 
 ## Prerequisites
 
-- Credentials in `~/.dbhq/jira/config.json` - run setup if absent
+- Credentials in `~/.dbhq/atlassian/config.json` - shared with `confluence`; run setup if absent
 - `jq` and `curl`
 
 ## Setup
 
 ```bash
-${CLAUDE_SKILL_DIR}/scripts/jira-setup.sh
+${CLAUDE_SKILL_DIR}/../_shared/scripts/atlassian-setup.sh
 ```
 
-It asks for the site URL, the account email, and an API token from <https://id.atlassian.com/manage-profile/security/api-tokens>. The token input is hidden. It verifies against `/rest/api/3/myself` **before** writing anything, then saves to `~/.dbhq/jira/config.json` at mode 600. Credentials live outside the repository and are never committed.
+It asks for the site URL, the account email, and an API token from <https://id.atlassian.com/manage-profile/security/api-tokens>. The token input is hidden. It verifies Jira access against `/rest/api/3/myself` **before** writing anything, then checks Confluence access too (a warning, not a blocker - a token can be valid for Jira with no Confluence licence), and saves to `~/.dbhq/atlassian/config.json` at mode 600 only after both checks have run. Credentials live outside the repository and are never committed.
 
 ## Look before you create
 
@@ -137,4 +137,4 @@ Jira Cloud allows roughly 60 authenticated requests a minute. `bulk` paces itsel
 
 ## Credentials
 
-`~/.dbhq/jira/config.json`, mode 600, holding `site`, `email` and `token`. The token never reaches a command line - `curl` reads it from a 0600 config file, so it does not appear in `ps` or in shell history.
+`~/.dbhq/atlassian/config.json`, mode 600, holding `site`, `email`, `token` and whether Confluence access is available - shared with `confluence`, since one Atlassian Cloud token authenticates both products on the same site. The token never reaches a command line - `curl` reads it from a 0600 config file, so it does not appear in `ps` or in shell history.

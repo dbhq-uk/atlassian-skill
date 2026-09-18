@@ -1146,22 +1146,41 @@ def adf_to_markdown(doc):
 
 # --- the Jira profile ---
 
-# Node types Confluence renders and Jira does not. A description carrying one
-# is accepted by the API and then shows as nothing on the issue, which looks
-# like it worked. Refused here instead.
+# Node and mark types Confluence renders and Jira does not. A description
+# carrying a Confluence-only node is accepted by the API and then shows as
+# nothing on the issue; a Confluence-only mark would lose the formatting on
+# the text it wraps. Either way it looks like it worked. Refused here
+# instead. No mark type is in this set today - see the note below on why
+# _walk still has to be able to reach one.
 #
 # This check (in html_to_adf_for_jira, below) runs against the tree
 # html_to_adf already returned, not against the HTML+ source text - and that
-# is what makes it safe against opaque passthrough (Task 11b) with no extra
-# handling. An opaque HTML+ element's data-adf is decoded by _decode_adf
-# before the node is ever appended to the tree (see the ADF_OPAQUE branch in
-# _Builder.handle_starttag), so a status lozenge or a decision list smuggled
-# in through <div data-type="adf-opaque" data-adf="..."> comes back out with
-# its genuine "type" restored - "status", "decisionList" - exactly as if it
-# had been written with the native <span data-type="status"> syntax. Walking
-# the parsed tree therefore catches both forms with the same check; there is
-# nothing for this function to do about ADF_OPAQUE or ADF_OPAQUE_MARK by
-# name. Proven, not just argued, by TestJiraProfile below.
+# is what makes it safe against opaque passthrough (Task 11b) for a NODE,
+# with no extra handling. An opaque HTML+ element's data-adf is decoded by
+# _decode_adf before the node is ever appended to the tree (see the
+# ADF_OPAQUE branch in _Builder.handle_starttag), so a status lozenge or a
+# decision list smuggled in through
+# <div data-type="adf-opaque" data-adf="..."> comes back out with its
+# genuine "type" restored - "status", "decisionList" - exactly as if it had
+# been written with the native <span data-type="status"> syntax.
+#
+# That property only protects this function where _walk actually looks -
+# and the first version of _walk only descended into a node's "content",
+# never into a text node's "marks". _decode_adf restores an opaque mark's
+# genuine type the same way it restores an opaque node's (see the
+# ADF_OPAQUE_MARK branch in the same method), so a Confluence-only mark
+# smuggled in through <span data-type="adf-opaque-mark"> would have reached
+# the tree correctly typed and then sailed straight past this check anyway,
+# because nothing ever read the marks list it landed in. CONFLUENCE_ONLY
+# holds no mark today, so nothing was actually smuggled by this gap - but
+# the day a mark is added here, the refusal would have silently never
+# fired, with no error to say why. _walk now yields a node's marks too,
+# closing that before this set has a real mark member to expose it.
+# Proven, not just argued, by TestJiraProfile below - for a node with named
+# HTML+ support (status), for a node with none (bodiedExtension, which can
+# only ever arrive opaquely), and for a mark forced into this set the same
+# way (annotation, which likewise has no named HTML+ support here and so
+# can also only ever arrive opaquely).
 #
 # bodiedExtension belongs in this set for a sharper reason than the other
 # six: this converter has no named HTML+ syntax for it at all (unlike
@@ -1175,14 +1194,20 @@ CONFLUENCE_ONLY = {"status", "decisionList", "decisionItem", "expand",
 
 
 def _walk(node):
-    """Yield node, then every node reachable through its "content" list.
+    """Yield node, then every node reachable through its "content" list,
+    and every mark reachable through its "marks" list.
 
     Walks the parsed ADF tree, which is what makes the opaque-passthrough
-    case safe - see the CONFLUENCE_ONLY comment above.
+    case safe for both a smuggled node and a smuggled mark - see the
+    CONFLUENCE_ONLY comment above. The marks branch matters even though a
+    mark itself never has content or further marks of its own to recurse
+    into: without it, a mark's restored type is never visited at all.
     """
     yield node
     for child in node.get("content", []):
         yield from _walk(child)
+    for mark in node.get("marks", []):
+        yield from _walk(mark)
 
 
 def html_to_adf_for_jira(fragment):
