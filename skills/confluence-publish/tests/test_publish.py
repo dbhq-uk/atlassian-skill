@@ -295,6 +295,44 @@ class TestFrontmatterEdgeCases(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o640)
 
 
+class TestFrontmatterCli(unittest.TestCase):
+    """frontmatter.py's own CLI, not the library functions - publish.sh
+    pipes `body`'s stdout onward and captures `set-page-id`'s stderr, and
+    neither expects a multi-line Python traceback as the answer.
+    """
+
+    def _run(self, *args):
+        import subprocess
+        return subprocess.run(
+            [sys.executable, str(SCRIPTS / "frontmatter.py"), *args],
+            capture_output=True, text=True,
+        )
+
+    def test_body_on_a_non_utf8_file_gives_one_line_not_a_traceback(self):
+        f = tempfile.NamedTemporaryFile(suffix=".md", delete=False)
+        f.write(b"---\nconfluence:\n  space: \"1\"\n---\n\n\xff\xfe not utf-8\n")
+        f.close()
+        result = self._run("body", f.name)
+        self.assertEqual(result.returncode, 1)
+        self.assertTrue(result.stderr.startswith("Error:"), result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_read_on_a_missing_file_gives_one_line_not_a_traceback(self):
+        result = self._run("read", "/nonexistent/path/does-not-exist.md")
+        self.assertEqual(result.returncode, 1)
+        self.assertTrue(result.stderr.startswith("Error:"), result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_an_ordinary_file_still_works_through_the_cli(self):
+        path = pathlib.Path(
+            tempfile.NamedTemporaryFile("w", suffix=".md", delete=False).name
+        )
+        path.write_text(BOUND)
+        result = self._run("read", str(path))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("page_id=8901234", result.stdout)
+
+
 class TestMarkdownToHtmlPlus(unittest.TestCase):
     def test_headings_and_paragraphs(self):
         self.assertEqual(

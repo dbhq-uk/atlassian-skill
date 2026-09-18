@@ -277,18 +277,33 @@ def main(argv=None):
     parser.add_argument("value", nargs="?")
     args = parser.parse_args(argv)
 
-    if args.command == "read":
-        binding = read_binding(args.path)
-        for key in KEYS:
-            print(f"{key}={binding[key] or ''}")
-    elif args.command == "body":
-        text, _ = _read(args.path)
-        sys.stdout.write(strip_frontmatter(text))
-    else:
-        if not args.value:
-            print("Error: set-page-id needs a page id.", file=sys.stderr)
-            return 1
-        write_page_id(args.path, args.value)
+    # publish.sh pipes `body`'s stdout straight into md_to_htmlplus.py and
+    # captures `set-page-id`'s stderr to report a failure - neither expects
+    # a multi-line Python traceback as the answer. A file that is not valid
+    # UTF-8, missing, or unreadable (a read-only directory on set-page-id,
+    # proven live) all raised uncaught before this existed; caught here the
+    # same way htmlplus.py's own CLI catches a conversion failure, so the
+    # caller gets one line naming what went wrong instead of a stack trace.
+    try:
+        if args.command == "read":
+            binding = read_binding(args.path)
+            for key in KEYS:
+                print(f"{key}={binding[key] or ''}")
+        elif args.command == "body":
+            text, _ = _read(args.path)
+            sys.stdout.write(strip_frontmatter(text))
+        else:
+            if not args.value:
+                print("Error: set-page-id needs a page id.", file=sys.stderr)
+                return 1
+            write_page_id(args.path, args.value)
+    except Exception as exc:
+        print(
+            f"Error: {args.path} could not be read or written "
+            f"({type(exc).__name__}: {exc}).",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 

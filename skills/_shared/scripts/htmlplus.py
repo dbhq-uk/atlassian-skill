@@ -1607,9 +1607,34 @@ def main(argv=None):
             doc = html_to_adf_for_jira(sys.stdin.read())
             json.dump(doc, sys.stdout, separators=(",", ":"))
         elif args.command == "to-html":
-            sys.stdout.write(adf_to_html(json.load(sys.stdin)))
+            # confluence-pages.sh read pipes a live page's body straight
+            # into this with no chance to validate it first - a null body,
+            # a truncated response, or ADF this build has never seen the
+            # shape of all reach json.load or adf_to_html here. Only
+            # ConversionError is a message this CLI already explains;
+            # anything else, uncaught, is a Python traceback as the whole
+            # answer to "what does the wiki say about X" - not what "read"
+            # should hand back for a page it cannot render, the same reason
+            # check-roundtrip's own try/except below exists.
+            try:
+                sys.stdout.write(adf_to_html(json.load(sys.stdin)))
+            except ConversionError:
+                raise
+            except Exception as exc:
+                raise ConversionError(
+                    f"the page body could not be read as HTML+ "
+                    f"({type(exc).__name__}: {exc})."
+                )
         elif args.command == "to-markdown":
-            sys.stdout.write(adf_to_markdown(json.load(sys.stdin)))
+            try:
+                sys.stdout.write(adf_to_markdown(json.load(sys.stdin)))
+            except ConversionError:
+                raise
+            except Exception as exc:
+                raise ConversionError(
+                    f"the page body could not be read as markdown "
+                    f"({type(exc).__name__}: {exc})."
+                )
         elif args.command == "check-roundtrip":
             # Reads the page's current ADF (exactly what the API returned)
             # on stdin. Silent on success, so confluence-pages.sh's update

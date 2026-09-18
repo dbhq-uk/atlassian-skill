@@ -1605,6 +1605,21 @@ class TestReverseCli(unittest.TestCase):
         self.assertIn("orderedList", r.stderr)
         self.assertTrue(r.stderr.startswith("Error:"))
 
+    def test_to_html_on_a_null_body_gives_one_line_not_a_traceback(self):
+        # confluence-pages.sh read pipes a live page's body straight in with
+        # no chance to validate first. check-roundtrip already had a
+        # catch-all for exactly this shape of failure; to-html and
+        # to-markdown did not.
+        r = self._run(["to-html"], "null")
+        self.assertEqual(r.returncode, 1)
+        self.assertTrue(r.stderr.startswith("Error:"), r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+
+    def test_to_markdown_on_malformed_json_gives_one_line_not_a_traceback(self):
+        r = self._run(["to-markdown"], "not json at all")
+        self.assertEqual(r.returncode, 1)
+        self.assertTrue(r.stderr.startswith("Error:"), r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
 
 class TestRoundtripGate(unittest.TestCase):
     """check_roundtrip itself (Important 2) - the function
