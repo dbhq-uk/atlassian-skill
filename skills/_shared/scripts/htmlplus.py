@@ -193,8 +193,15 @@ def _parse_plain_number(raw, attr_name):
     produces once rendered by _format_number's counterpart before this fix
     existed - escaped html_to_adf's ConversionError handling as a raw
     Python ValueError traceback, all the way out through main().
+
+    isdecimal(), not isdigit(): isdigit() is true for characters int()
+    still rejects - a superscript or subscript digit ("2"-superscript,
+    "5"-subscript) reads as a digit to str.isdigit() but int() raises
+    ValueError on it regardless, which would have reopened the exact
+    bare-traceback gap this helper exists to close. isdecimal() is true
+    only for characters that can actually form a decimal integer.
     """
-    if not raw.isdigit():
+    if not raw.isdecimal():
         raise ConversionError(
             f'{attr_name}="{raw}" is not a plain number. Confluence drops '
             f"anything else rather than coercing it. Write a plain whole "
@@ -1143,18 +1150,30 @@ def _first_roundtrip_difference(original, roundtripped):
     """The ADF "type" of the node closest to where original and
     roundtripped first disagree, or None if they are identical.
 
-    Walks both trees together and returns the type of the innermost node
-    still common to both paths when the walk hits a difference - never a
-    value, only the type name, so this is safe to put in a refusal message
-    without carrying page content into it.
+    Walks both trees together and returns the type of the innermost real
+    ADF node still common to both paths when the walk hits a difference -
+    never a value, only the type name, so this is safe to put in a refusal
+    message without carrying page content into it.
+
+    Only a dict reached by walking down a "content" or "marks" list is a
+    real ADF node whose own "type" is meaningful to report - the review
+    round found that adopting a["type"] at any depth, including inside
+    "attrs", was wrong: a subsup mark's attrs is {"type": "sub"} or
+    {"type": "sup"}, and that "type" is an attribute value, not a node
+    type, but the same string either way, so the naive version reported
+    "sub" as if it were an ADF node type. is_node tracks whether the
+    current dict was reached that way; it is only carried onward through a
+    "content" or "marks" key, so a dict found via "attrs" (or anything
+    else) never adopts its own "type" field, however it is spelled.
     """
-    def walk(a, b, nearest_type):
+    def walk(a, b, nearest_type, is_node=True):
         if isinstance(a, dict) and isinstance(b, dict):
-            here = a.get("type") if isinstance(a.get("type"), str) else nearest_type
+            here = (a.get("type") if is_node and isinstance(a.get("type"), str)
+                    else nearest_type)
             if set(a.keys()) != set(b.keys()):
                 return here
             for key in a:
-                diff = walk(a[key], b[key], here)
+                diff = walk(a[key], b[key], here, is_node=key in ("content", "marks"))
                 if diff is not None:
                     return diff
             return None
@@ -1162,7 +1181,7 @@ def _first_roundtrip_difference(original, roundtripped):
             if len(a) != len(b):
                 return nearest_type
             for x, y in zip(a, b):
-                diff = walk(x, y, nearest_type)
+                diff = walk(x, y, nearest_type, is_node=is_node)
                 if diff is not None:
                     return diff
             return None
@@ -1178,19 +1197,26 @@ def check_roundtrip(doc):
     html_to_adf unchanged, and if not, the ADF type nearest the first
     place it does not.
 
+    "Unchanged" is Python value equality (==), not byte-for-byte string
+    identity - deliberately. width: 1800.0 coming back as width: 1800 is
+    exactly what _format_number exists to do, and 1800.0 == 1800 is True,
+    so it counts as unchanged here, correctly; refusing that would make
+    this converter's own acceptance bar unreachable on a real page.
+
     The write-path gate this exists for: UPDATE REPLACES THE WHOLE BODY, so
     a fetch/splice/verify update is only as safe as this converter's
     round-trip fidelity on the page actually being replaced. Before Task
     11b a page carrying an unrecognised node or mark simply refused to
     convert at all - loud, but safe, since nothing was ever written. Opaque
-    passthrough lets those pages convert now; for the ones that still do
-    not round-trip byte-identical (a known type dropping an attr or a mark
-    this converter has no HTML+ for), that refusal has to be reproduced
-    deliberately here, or reading now succeeds where it used to fail and
-    writing silently drops whatever this converter could not carry through
-    - the exact failure Task 7 closed for an outright-unsupported node,
-    reappearing one level down for a partially-supported one. Does not
-    itself decide whether to write; that is confluence-pages.sh's call.
+    passthrough lets those pages convert now; for the ones that still are
+    not identical under this comparison (a known type dropping an attr or
+    a mark this converter has no HTML+ for), that refusal has to be
+    reproduced deliberately here, or reading now succeeds where it used to
+    fail and writing silently drops whatever this converter could not
+    carry through - the exact failure Task 7 closed for an
+    outright-unsupported node, reappearing one level down for a
+    partially-supported one. Does not itself decide whether to write; that
+    is confluence-pages.sh's call.
     """
     roundtripped = html_to_adf(adf_to_html(doc))
     if roundtripped == doc:
@@ -1217,12 +1243,27 @@ def main(argv=None):
             # Reads the page's current ADF (exactly what the API returned)
             # on stdin. Silent on success, so confluence-pages.sh's update
             # gate can tell "safe to proceed" from "refuse" by exit code
-            # alone. A ConversionError raised during the conversion itself
-            # (an outright-unsupported node, or the colwidth-consistency
-            # check firing on a real page nobody edited) reaches the same
-            # except block below as a failure of this same kind - the page
-            # is not safe to write back either way.
-            ok, differing_type = check_roundtrip(json.load(sys.stdin))
+            # alone. The inner try/except is this command's own: its caller
+            # is a bash gate that prints whatever reaches stderr as a
+            # "Cause:" line verbatim, so a raw traceback there is not just a
+            # worse error, it is twelve lines of Python in a refusal
+            # message someone is expected to read and act on. A
+            # ConversionError from the conversion itself (an
+            # outright-unsupported node, or the colwidth-consistency check
+            # firing on a real page nobody edited) passes through unchanged
+            # - the page is not safe to write back either way. Anything
+            # else - a null body, a body that is not JSON at all - is not a
+            # shape this command explains on its own, so it collapses to
+            # one line instead of reaching the caller as a stack trace.
+            try:
+                ok, differing_type = check_roundtrip(json.load(sys.stdin))
+            except ConversionError:
+                raise
+            except Exception as exc:
+                raise ConversionError(
+                    f"the page body could not be checked "
+                    f"({type(exc).__name__}: {exc})."
+                )
             if not ok:
                 raise ConversionError(
                     f'a "{differing_type}" node does not survive converting '

@@ -105,6 +105,16 @@ Fix: read the page again, splice your change into what comes back, and pass --ba
 
 Do exactly that - read again, re-splice, update with the new version. Do not re-run the same command with the same body file; it was refused for a reason and nothing was sent.
 
+If the page carries something this converter cannot reproduce exactly, `update` refuses the same way, before sending anything:
+
+```
+Error: page 1234567 ("Payment Correlation") cannot be safely edited through this skill.
+Cause: a "table" node does not survive converting to HTML+ and back to ADF unchanged.
+Fix: nothing was sent. This page carries something this converter cannot round-trip exactly - editing it here risks silently losing part of it that your change never touched.
+```
+
+This means the page has a node type, or an attribute on one, that this converter cannot carry through unchanged - writing would silently alter part of the page your edit never touched, not just the part you meant to change. **Re-reading will not fix this, and there is no bypass and no `--force`.** Stop, and make this edit directly in the Confluence UI instead.
+
 **Never invent an opaque id.** `data-id`, `data-collection`, `data-media-id`, `data-resource-id` and inline-comment `data-annotation-id` all come from a fetch or from an upload step's output. A made-up one produces a broken node on a live page.
 
 ## What the converter does for you

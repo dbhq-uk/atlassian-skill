@@ -1197,6 +1197,32 @@ class TestRoundtripGate(unittest.TestCase):
     """check_roundtrip itself (Important 2) - the function
     confluence-pages.sh's update command gates a write on."""
 
+    def test_differing_type_is_a_real_node_type_not_an_attrs_value(self):
+        # Minor 1 (review round two). _first_roundtrip_difference used to
+        # adopt a["type"] at any depth, including inside "attrs" - and a
+        # subsup mark's own attrs is {"type": "sub"} or {"type": "sup"},
+        # an attribute value that happens to share the key name "type"
+        # with the thing this function is meant to report. The refusal
+        # message promises to carry no page content, but "sub"/"sup" here
+        # was never a node type at all - it is this mark's own attrs
+        # value. The extra "extraAttr" is not carried by
+        # adf_to_html's subsup rendering (only the tag name is), so this
+        # mark genuinely fails to round-trip; the type reported for that
+        # failure must be "subsup" (the mark's real ADF type), not "sub".
+        doc = {
+            "type": "doc", "version": 1,
+            "content": [
+                {"type": "paragraph", "content": [
+                    {"type": "text", "text": "H2O",
+                     "marks": [{"type": "subsup",
+                                "attrs": {"type": "sub", "extraAttr": "keep-me"}}]},
+                ]},
+            ],
+        }
+        ok, differing_type = check_roundtrip(doc)
+        self.assertFalse(ok)
+        self.assertEqual(differing_type, "subsup")
+
     def test_clean_document_is_ok(self):
         doc = html_to_adf("<p><strong>Hi.</strong></p>")
         ok, differing_type = check_roundtrip(doc)
