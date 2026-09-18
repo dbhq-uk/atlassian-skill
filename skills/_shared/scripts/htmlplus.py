@@ -315,6 +315,41 @@ def _paragraph_marks(a):
     return marks
 
 
+def _set_local_id(attrs_out, a):
+    """Copy localId from data-local-id/data-local-id-null into attrs_out,
+    preserving all three states real ADF actually has - not the two an
+    "in a" check alone can tell apart.
+
+    A live-site measurement, re-run after the fact against a page this
+    converter had already been declared to pass, found the third: a real
+    taskItem with localId: null (a JSON null Confluence itself sent, not
+    a missing key and not an empty string) round-tripped to localId: ""
+    instead - html_to_adf had never read a value back distinctly from
+    "attribute absent", so the only two encodings available were "the key
+    is missing" and "the key is a string", and a JSON null had nowhere
+    left to go but the empty string.
+
+    So the key is absent (this function is a no-op - attrs_out is left
+    exactly as the caller built it, gaining no "localId" key at all), the
+    key is present holding a real value (the ordinary data-local-id="..."
+    case), or the key is present holding null - and null gets its own
+    valueless boolean attribute, data-local-id-null, checked first, rather
+    than folding into data-local-id's own value: a value of the literal
+    four-character string "None" (or "null") would be indistinguishable
+    from the real null this exists to carry. See _local_id_attr, this
+    function's mirror on the way out (ADF to HTML+), for the same
+    three-way split from the other direction. Every one of the fourteen
+    node types that carry localId reads it back through this one function,
+    so the fix and its reasoning live in exactly one place rather than
+    fourteen near-identical copies of the same three-line "if" this
+    replaced.
+    """
+    if "data-local-id-null" in a:
+        attrs_out["localId"] = None
+    elif "data-local-id" in a:
+        attrs_out["localId"] = a["data-local-id"]
+
+
 def _decode_adf(payload):
     """The exact node or mark an opaque HTML+ element's data-adf carried.
 
@@ -552,16 +587,17 @@ class _Builder(HTMLParser):
             # paragraph: leave them off and either Confluence assigns its
             # own id, or there is simply no alignment/indent to have.
             node = {"type": "paragraph"}
-            if "data-local-id" in a:
-                node["attrs"] = {"localId": a["data-local-id"]}
+            attrs = {}
+            _set_local_id(attrs, a)
+            if attrs:
+                node["attrs"] = attrs
             marks = _paragraph_marks(a)
             if marks:
                 node["marks"] = marks
             self._open(node)
         elif tag in HEADINGS:
             attrs = {"level": HEADINGS[tag]}
-            if "data-local-id" in a:
-                attrs["localId"] = a["data-local-id"]
+            _set_local_id(attrs, a)
             self._open({"type": "heading", "attrs": attrs})
         elif tag == "code" and self.blocks[-1]["type"] == "codeBlock":
             # Inside a <pre>, <code> carries the language rather than an
@@ -601,8 +637,7 @@ class _Builder(HTMLParser):
                     f"Use one of: {', '.join(sorted(PANEL_TYPES))}."
                 )
             attrs = {"panelType": kind}
-            if "data-local-id" in a:
-                attrs["localId"] = a["data-local-id"]
+            _set_local_id(attrs, a)
             # The custom-panel attrs (icon id, icon, icon text, colour) are
             # an editor pick, round-trip bookkeeping the same as a media id -
             # not something to invent when hand-authoring a plain panel, so
@@ -629,8 +664,7 @@ class _Builder(HTMLParser):
                 "type": "status",
                 "attrs": {"text": "", "color": colour},
             }
-            if "data-local-id" in a:
-                self._pending_status["attrs"]["localId"] = a["data-local-id"]
+            _set_local_id(self._pending_status["attrs"], a)
             self._append(self._pending_status)
 
         elif tag == "ul" and dtype == "task-list":
@@ -648,8 +682,10 @@ class _Builder(HTMLParser):
             # same omission applies to the whole attrs key, not just the
             # value inside it.
             node = {"type": "taskList"}
-            if "data-local-id" in a:
-                node["attrs"] = {"localId": a["data-local-id"]}
+            attrs = {}
+            _set_local_id(attrs, a)
+            if attrs:
+                node["attrs"] = attrs
             self._open(node)
         elif tag == "li" and dtype == "task-item":
             # Confluence assigns every taskItem a real localId on save,
@@ -664,8 +700,7 @@ class _Builder(HTMLParser):
             # Unlike taskList, taskItem's attrs always exists (it holds
             # state too), so only the localId key inside it is conditional.
             attrs = {"state": "TODO"}
-            if "data-local-id" in a:
-                attrs["localId"] = a["data-local-id"]
+            _set_local_id(attrs, a)
             self._open({"type": "taskItem", "attrs": attrs})
         elif tag == "input":
             # The checkbox carries the state of the task item it sits in -
@@ -687,8 +722,10 @@ class _Builder(HTMLParser):
         elif tag == "ul" and dtype == "decision-list":
             # Same treatment as taskList above, for the same reason.
             node = {"type": "decisionList"}
-            if "data-local-id" in a:
-                node["attrs"] = {"localId": a["data-local-id"]}
+            attrs = {}
+            _set_local_id(attrs, a)
+            if attrs:
+                node["attrs"] = attrs
             self._open(node)
         elif tag == "li" and dtype == "decision-item":
             state = a.get("data-state", "DECIDED")
@@ -701,14 +738,12 @@ class _Builder(HTMLParser):
             # reason: decisionItem is Confluence's other server-assigned-id
             # list type, sibling to taskItem in every way that matters here.
             attrs = {"state": state}
-            if "data-local-id" in a:
-                attrs["localId"] = a["data-local-id"]
+            _set_local_id(attrs, a)
             self._open({"type": "decisionItem", "attrs": attrs})
 
         elif tag == "details":
             attrs = {"title": ""}
-            if "data-local-id" in a:
-                attrs["localId"] = a["data-local-id"]
+            _set_local_id(attrs, a)
             node = {"type": "expand", "attrs": attrs}
             marks = _breakout_marks(a)
             if marks:
@@ -727,8 +762,7 @@ class _Builder(HTMLParser):
             # rather than inventing "plaintext" as if it had been chosen.
             node = {"type": "codeBlock"}
             attrs = {}
-            if "data-local-id" in a:
-                attrs["localId"] = a["data-local-id"]
+            _set_local_id(attrs, a)
             if attrs:
                 node["attrs"] = attrs
             marks = _breakout_marks(a)
@@ -738,8 +772,7 @@ class _Builder(HTMLParser):
 
         elif tag == "time":
             attrs = {"timestamp": _date_to_timestamp(a.get("datetime", ""))}
-            if "data-local-id" in a:
-                attrs["localId"] = a["data-local-id"]
+            _set_local_id(attrs, a)
             self._append({"type": "date", "attrs": attrs})
             self._in_time = True
 
@@ -757,8 +790,7 @@ class _Builder(HTMLParser):
                 # put it is what _check_nesting can actually rule on; moving
                 # it to the root silently relocates their content instead.
                 attrs = {"url": href}
-                if "data-local-id" in a:
-                    attrs["localId"] = a["data-local-id"]
+                _set_local_id(attrs, a)
                 node = {"type": CARD_TYPES[appearance], "attrs": attrs}
                 self._append(node)
                 self._in_card = True
@@ -792,8 +824,10 @@ class _Builder(HTMLParser):
 
         elif tag == "hr":
             node = {"type": "rule"}
-            if "data-local-id" in a:
-                node["attrs"] = {"localId": a["data-local-id"]}
+            attrs = {}
+            _set_local_id(attrs, a)
+            if attrs:
+                node["attrs"] = attrs
             self._append(node)
 
         elif tag in SIMPLE_BLOCKS:
@@ -808,8 +842,7 @@ class _Builder(HTMLParser):
             # nobody hand-authors.
             node = {"type": SIMPLE_BLOCKS[tag]}
             attrs = {}
-            if "data-local-id" in a:
-                attrs["localId"] = a["data-local-id"]
+            _set_local_id(attrs, a)
             if tag == "ol" and "start" in a:
                 attrs["order"] = _parse_plain_number(a["start"], "start")
             if attrs:
@@ -817,6 +850,16 @@ class _Builder(HTMLParser):
             self._open(node)
 
         elif tag == "table":
+            # attrs is omitted entirely, not left as an empty {}, when the
+            # table has none of the below - a bare <table> with no
+            # data-width/layout/localId etc. is a real, live-measured
+            # shape (most tables on at least one real page carried none at
+            # all), and an unconditional attrs_out here, as an earlier
+            # version of this converter had, produced "attrs": {} for
+            # every one of them: present-but-empty and absent are
+            # different ADF, the same distinction _close already applies
+            # to "content" and every other optional-attrs branch in this
+            # file already applies to its own attrs dict.
             attrs_out = {}
             if "data-width" in a:
                 attrs_out["width"] = _parse_plain_number(a["data-width"], "data-width")
@@ -826,9 +869,11 @@ class _Builder(HTMLParser):
                 attrs_out["isNumberColumnEnabled"] = True
             if a.get("data-display-mode"):
                 attrs_out["displayMode"] = a["data-display-mode"]
-            if "data-local-id" in a:
-                attrs_out["localId"] = a["data-local-id"]
-            self._open({"type": "table", "attrs": attrs_out})
+            _set_local_id(attrs_out, a)
+            node = {"type": "table"}
+            if attrs_out:
+                node["attrs"] = attrs_out
+            self._open(node)
             # next_col: the column cursor for the row currently being
             # parsed, reset at each <tr>. occupied: column index -> number
             # of further rows, beyond the row a rowspan started in, that
@@ -854,8 +899,10 @@ class _Builder(HTMLParser):
                     "table."
                 )
             node = {"type": "tableRow"}
-            if "data-local-id" in a:
-                node["attrs"] = {"localId": a["data-local-id"]}
+            attrs = {}
+            _set_local_id(attrs, a)
+            if attrs:
+                node["attrs"] = attrs
             self._open(node)
             frame = self._table_stack[-1]
             frame["next_col"] = 0
@@ -918,8 +965,7 @@ class _Builder(HTMLParser):
                     frame["occupied"][col_index + i] = rowspan - 1
             frame["next_col"] = col_index + colspan
 
-            if "data-local-id" in a:
-                cell_attrs["localId"] = a["data-local-id"]
+            _set_local_id(cell_attrs, a)
             if "data-background" in a:
                 cell_attrs["background"] = a["data-background"]
             self._open({"type": node_type, "attrs": cell_attrs})
@@ -957,8 +1003,7 @@ class _Builder(HTMLParser):
                 node_attrs["width"] = _parse_float(a["data-width"], "data-width")
             if "data-height" in a:
                 node_attrs["height"] = _parse_float(a["data-height"], "data-height")
-            if "data-local-id" in a:
-                node_attrs["localId"] = a["data-local-id"]
+            _set_local_id(node_attrs, a)
             # A leaf, like hardBreak/rule/status - appended through _append
             # (not a raw list.append) so it is checked against
             # _check_nesting like everything else that reaches the tree,
@@ -976,8 +1021,10 @@ class _Builder(HTMLParser):
             # file already treats an absent optional attribute (see
             # _close's own note on omitting rather than emitting empty).
             node = {"type": "caption"}
-            if "data-local-id" in a:
-                node["attrs"] = {"localId": a["data-local-id"]}
+            attrs = {}
+            _set_local_id(attrs, a)
+            if attrs:
+                node["attrs"] = attrs
             self._open(node)
 
         elif tag in ("div", "span") and dtype == ADF_OPAQUE:
@@ -1426,6 +1473,25 @@ def _opaque_mark_to_html(mark, inner):
     return f'<span data-type="{ADF_OPAQUE_MARK}" data-adf="{_encode_adf(mark)}">{inner}</span>'
 
 
+def _local_id_attr(a):
+    """The data-local-id (or data-local-id-null) HTML+ attribute fragment
+    for a node's optional "localId" attrs key - "" when the key is absent
+    entirely, ready to splice straight after a tag name. Mirrors
+    _set_local_id, the read side, and carries the same three-state
+    reasoning: absent (nothing to say - "" here), present as a real JSON
+    null (a live-measured, real shape - Confluence assigns the id slot on
+    some nodes without a value), or present as a string (the ordinary
+    case). null gets its own valueless boolean attribute rather than a
+    value of data-local-id itself, or the string "None" would be
+    indistinguishable from a genuine localId that happened to read "None".
+    """
+    if "localId" not in a:
+        return ""
+    if a["localId"] is None:
+        return " data-local-id-null"
+    return f' data-local-id="{a["localId"]}"'
+
+
 def _inline_to_html(node):
     t = node.get("type")
     if t == "text":
@@ -1461,17 +1527,17 @@ def _inline_to_html(node):
         return _opaque_to_html(node, tag="span")
     if t == "status":
         a = node["attrs"]
-        local_id = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        local_id = _local_id_attr(a)
         return (f'<span data-type="status" data-color="{a["color"]}"{local_id}>'
                 f'{_escape(a["text"])}</span>')
     if t == "date":
         a = node["attrs"]
         iso = _timestamp_to_iso(a["timestamp"])
-        local_id = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        local_id = _local_id_attr(a)
         return f'<time datetime="{iso}"{local_id}>{iso}</time>'
     if t == "inlineCard":
         a = node["attrs"]
-        local_id = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        local_id = _local_id_attr(a)
         return f'<a href="{a["url"]}" data-card-appearance="inline"{local_id}></a>'
     if t == "hardBreak":
         return "<br>"
@@ -1523,7 +1589,7 @@ def _node_to_html(node):
     if known is not None and not _fully_modelled(node, *known):
         return _opaque_to_html(node)
     if t == "paragraph":
-        local_id = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        local_id = _local_id_attr(a)
         align = indent = ""
         for mark in node.get("marks") or []:
             if mark["type"] == "alignment":
@@ -1533,12 +1599,13 @@ def _node_to_html(node):
         return f"<p{local_id}{align}{indent}>{_inline_html(node)}</p>"
     if t == "heading":
         level = a["level"]
-        local_id = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        local_id = _local_id_attr(a)
         return f"<h{level}{local_id}>{_inline_html(node)}</h{level}>"
     if t == "panel":
         bits = []
-        if "localId" in a:
-            bits.append(f'data-local-id="{a["localId"]}"')
+        local_id_bit = _local_id_attr(a).strip()
+        if local_id_bit:
+            bits.append(local_id_bit)
         if "panelIconId" in a:
             bits.append(f'data-panel-icon-id="{a["panelIconId"]}"')
         if "panelIcon" in a:
@@ -1551,14 +1618,14 @@ def _node_to_html(node):
         return (f'<div data-type="panel-{a["panelType"]}"{extra}>'
                 f"{_children_html(node)}</div>")
     if t == "expand":
-        local_id = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        local_id = _local_id_attr(a)
         breakout = _node_marks_html(node)
         return (f'<details{local_id}{breakout}>'
                 f'<summary>{_escape(a.get("title", ""))}</summary>'
                 f"{_children_html(node)}</details>")
     if t == "codeBlock":
         text = "".join(c.get("text", "") for c in node.get("content", []))
-        local_id = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        local_id = _local_id_attr(a)
         breakout = _node_marks_html(node)
         # No class at all when the node carries no "language" - the real
         # shape of an unlabelled block (see the html_to_adf side of this
@@ -1580,41 +1647,41 @@ def _node_to_html(node):
         # for a node that never had the key at all, and html_to_adf would
         # then read that back as a present-but-empty key, still not what
         # the source had.
-        local_id = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        local_id = _local_id_attr(a)
         return (f'<ul data-type="task-list"{local_id}>'
                 f"{_children_html(node)}</ul>")
     if t == "taskItem":
         checked = " checked" if a.get("state") == "DONE" else ""
-        local_id = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        local_id = _local_id_attr(a)
         return (f'<li data-type="task-item"{local_id}>'
                 f'<input type="checkbox"{checked}>{_inline_html(node)}</li>')
     if t == "decisionList":
-        local_id = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        local_id = _local_id_attr(a)
         return (f'<ul data-type="decision-list"{local_id}>'
                 f"{_children_html(node)}</ul>")
     if t == "decisionItem":
-        local_id = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        local_id = _local_id_attr(a)
         return (f'<li data-type="decision-item" data-state="{a.get("state", "DECIDED")}"'
                 f"{local_id}>"
                 f"{_inline_html(node)}</li>")
     if t == "bulletList":
-        local_id = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        local_id = _local_id_attr(a)
         return f"<ul{local_id}>{_children_html(node)}</ul>"
     if t == "orderedList":
-        local_id = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        local_id = _local_id_attr(a)
         # order is HTML's own start="N" - the number the list starts
         # counting from - not a data-* attribute, since it is exactly what
         # start already means and an author might reasonably set it by hand.
         start = f' start="{_format_number(a["order"])}"' if "order" in a else ""
         return f"<ol{local_id}{start}>{_children_html(node)}</ol>"
     if t == "listItem":
-        local_id = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        local_id = _local_id_attr(a)
         return f"<li{local_id}>{_children_html(node)}</li>"
     if t == "blockquote":
-        local_id = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        local_id = _local_id_attr(a)
         return f"<blockquote{local_id}>{_children_html(node)}</blockquote>"
     if t == "rule":
-        local_id = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        local_id = _local_id_attr(a)
         return f"<hr{local_id}>"
     if t == "table":
         bits = []
@@ -1626,12 +1693,13 @@ def _node_to_html(node):
             bits.append('data-number-column="true"')
         if "displayMode" in a:
             bits.append(f'data-display-mode="{a["displayMode"]}"')
-        if "localId" in a:
-            bits.append(f'data-local-id="{a["localId"]}"')
+        local_id_bit = _local_id_attr(a).strip()
+        if local_id_bit:
+            bits.append(local_id_bit)
         open_tag = "<table" + ("" if not bits else " " + " ".join(bits)) + ">"
         return f"{open_tag}<tbody>{_children_html(node)}</tbody></table>"
     if t == "tableRow":
-        local_id = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        local_id = _local_id_attr(a)
         return f"<tr{local_id}>{_children_html(node)}</tr>"
     if t in ("tableCell", "tableHeader"):
         # colwidth's values are checked for shape, not just its key's
@@ -1663,8 +1731,9 @@ def _node_to_html(node):
                 bits.append(f'{key}="{_format_number(a[key])}"')
         if "background" in a:
             bits.append(f'data-background="{a["background"]}"')
-        if "localId" in a:
-            bits.append(f'data-local-id="{a["localId"]}"')
+        local_id_bit = _local_id_attr(a).strip()
+        if local_id_bit:
+            bits.append(local_id_bit)
         open_tag = f"<{tag}" + ("" if not bits else " " + " ".join(bits)) + ">"
         return f"{open_tag}{_children_html(node)}</{tag}>"
     if t == "layoutSection":
@@ -1682,7 +1751,7 @@ def _node_to_html(node):
                 f"{_children_html(node)}</div>")
     if t in ("blockCard", "embedCard"):
         appearance = "block" if t == "blockCard" else "embed"
-        local_id = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        local_id = _local_id_attr(a)
         return f'<a href="{a["url"]}" data-card-appearance="{appearance}"{local_id}></a>'
     if t == "mediaSingle":
         bits = [f'data-layout="{a.get("layout", "center")}"']
@@ -1714,11 +1783,12 @@ def _node_to_html(node):
             bits.append(f'data-width="{_format_number(a["width"])}"')
         if "height" in a:
             bits.append(f'data-height="{_format_number(a["height"])}"')
-        if "localId" in a:
-            bits.append(f'data-local-id="{a["localId"]}"')
+        local_id_bit = _local_id_attr(a).strip()
+        if local_id_bit:
+            bits.append(local_id_bit)
         return f'<div data-type="media" {" ".join(bits)}></div>'
     if t == "caption":
-        bits = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        bits = _local_id_attr(a)
         return f"<figcaption{bits}>{_inline_html(node)}</figcaption>"
     if t in _INLINE_LEAF_TYPES:
         # A known inline leaf type reached in block position. Not something

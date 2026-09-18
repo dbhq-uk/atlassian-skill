@@ -2025,6 +2025,98 @@ class TestLocalIdGeneralisation(unittest.TestCase):
                 self._round_trips(doc)
 
 
+class TestLocalIdThreeStates(unittest.TestCase):
+    """localId absent, present as a real JSON null, and present as a
+    string are three distinct ADF states, not two - found independently
+    re-measuring this converter against a live site after the previous
+    fix had already been declared to pass it. A real taskItem there
+    carries localId: null (Confluence assigns the slot without a value on
+    some taskItems - 21 of 55 sampled on the freshest slice checked, not
+    a rare shape), and the converter used to read it back as the string
+    "None": data-local-id="{a['localId']}" stringifies a Python None the
+    same as any other value, and nothing on the way back in could tell
+    that string apart from a taskItem whose real localId genuinely reads
+    "None". _set_local_id/_local_id_attr, this fix's two shared helpers,
+    close it once for every node type that carries localId, checked here
+    across a representative few rather than all nineteen call sites -
+    the mechanism is shared, so one path proves the rest.
+    """
+
+    def _round_trips(self, doc):
+        ok, differing_type = check_roundtrip(doc)
+        self.assertTrue(ok, differing_type)
+        self.assertEqual(html_to_adf(adf_to_html(doc)), doc)
+
+    def test_null_localid_round_trips_as_null_not_the_string_none(self):
+        doc = {
+            "type": "doc", "version": 1,
+            "content": [
+                {"type": "taskList", "content": [
+                    {"type": "taskItem", "attrs": {"state": "TODO", "localId": None},
+                     "content": [{"type": "text", "text": "x"}]},
+                ]},
+            ],
+        }
+        html = adf_to_html(doc)
+        self.assertIn("data-local-id-null", html)
+        self.assertNotIn('data-local-id="None"', html)
+        self._round_trips(doc)
+
+    def test_absent_null_and_empty_string_all_survive_distinctly(self):
+        # The three-way split this fix exists for, all in one document so
+        # a regression collapsing any two of them into each other shows up
+        # as a single failing assertion rather than three separate tests
+        # that could each pass by accident.
+        doc = {
+            "type": "doc", "version": 1,
+            "content": [
+                {"type": "heading", "attrs": {"level": 2}, "content": [
+                    {"type": "text", "text": "No localId key at all"}]},
+                {"type": "heading", "attrs": {"level": 2, "localId": None},
+                 "content": [{"type": "text", "text": "A real JSON null"}]},
+                {"type": "heading", "attrs": {"level": 2, "localId": ""},
+                 "content": [{"type": "text", "text": "An empty string"}]},
+            ],
+        }
+        self._round_trips(doc)
+        no_key, is_null, is_empty = doc["content"]
+        self.assertNotIn("localId", no_key["attrs"])
+        self.assertIsNone(is_null["attrs"]["localId"])
+        self.assertEqual(is_empty["attrs"]["localId"], "")
+        html = adf_to_html(doc)
+        self.assertIn("data-local-id-null", html)
+        self.assertIn('data-local-id=""', html)
+
+    def test_null_localid_on_table_and_media_too(self):
+        # Not just taskItem - the same three-state encoding on two more of
+        # the fourteen node types that carry localId, proving the fix by
+        # the shared mechanism rather than by re-testing every call site.
+        doc = {
+            "type": "doc", "version": 1,
+            "content": [
+                # tableCell carries an explicit "attrs": {} even when
+                # empty; tableRow omits the key entirely when it holds
+                # nothing - pre-existing, unrelated to this fix (see
+                # TestTableColspanRowspanTracking's own note on the same
+                # shape for table/tableCell).
+                {"type": "table", "attrs": {"localId": None}, "content": [
+                    {"type": "tableRow", "content": [
+                        {"type": "tableCell", "attrs": {}, "content": [
+                            {"type": "paragraph",
+                             "content": [{"type": "text", "text": "x"}]},
+                        ]},
+                    ]},
+                ]},
+                {"type": "mediaSingle", "attrs": {"layout": "center"}, "content": [
+                    {"type": "media", "attrs": {
+                        "type": "file", "id": "abc-123",
+                        "collection": "contentId-999", "localId": None}},
+                ]},
+            ],
+        }
+        self._round_trips(doc)
+
+
 class TestParagraphMarks(unittest.TestCase):
     """alignment and indentation, the editor's centre/indent toggles - node
     marks on a paragraph, not attrs, and not something any named renderer
@@ -2212,6 +2304,39 @@ class TestLayoutColumnWidth(unittest.TestCase):
         self.assertEqual(columns[1]["attrs"]["width"], 50.0)
 
 
+class TestTableAttrsOmission(unittest.TestCase):
+    """A bare <table> with none of data-width/layout/number-column/
+    display-mode/local-id gets no "attrs" key at all, not an empty {}.
+
+    Found independently re-measuring this converter against a live site
+    after the previous fix had already been declared to pass it: most
+    tables on at least one real page carried none of those - a genuinely
+    bare <table>, no sizing, no id - and this converter's table handler
+    built an unconditional {} regardless, the one named block-level
+    renderer in the whole file that had never picked up the "omit the
+    whole attrs key rather than leave it empty" rule the taskList fix
+    established. Present-but-empty and absent are different ADF; a table
+    that never had the key gained one anyway, and failed the round-trip
+    gate for it on every page whose editor never opened the table's own
+    sizing options.
+    """
+
+    def test_a_bare_table_carries_no_attrs_key(self):
+        doc = html_to_adf("<table><tbody><tr><td><p>x</p></td></tr></tbody></table>")
+        self.assertNotIn("attrs", doc["content"][0])
+        ok, differing_type = check_roundtrip(doc)
+        self.assertTrue(ok, differing_type)
+
+    def test_a_sized_table_still_carries_its_attrs(self):
+        # The other side of the same fix: a table that does carry
+        # something still gets a real, non-empty attrs dict - the
+        # omission is specific to "there is genuinely nothing to say",
+        # not a blanket drop.
+        doc = html_to_adf('<table data-width="400"><tbody><tr>'
+                           "<td><p>x</p></td></tr></tbody></table>")
+        self.assertEqual(doc["content"][0]["attrs"], {"width": 400})
+
+
 class TestTableColspanRowspanTracking(unittest.TestCase):
     """The column-index tracking rewrite behind the "2 errors" this task
     was asked to investigate.
@@ -2288,11 +2413,11 @@ class TestTableColspanRowspanTracking(unittest.TestCase):
         # data-colwidth, which _parse_plain_number could never read back.
         doc = {
             "type": "doc", "version": 1,
-            # table and tableCell always carry an "attrs" key, even empty -
-            # pre-existing, unrelated to this fix (unlike taskList/caption,
-            # which omit the key entirely when they hold nothing).
+            # tableCell always carries an "attrs" key, even empty - table
+            # omits it when it holds nothing (see TestTableAttrsOmission,
+            # which is what this table/tableRow shape without one proves).
             "content": [
-                {"type": "table", "attrs": {}, "content": [
+                {"type": "table", "content": [
                     {"type": "tableRow", "content": [
                         {"type": "tableCell",
                          "attrs": {"colspan": 2, "colwidth": [150, None]},

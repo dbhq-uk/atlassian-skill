@@ -90,6 +90,13 @@ lozenges, `<time>`, and every card. Every one of them is read back and
 preserved when splicing a change into a fetched page - see the checklist -
 and none of them is something to invent by hand.
 
+Occasionally a fetched element's local id is a real Confluence-assigned
+`null` rather than a value - a task item most often. That round-trips as
+`data-local-id-null` (a bare boolean attribute, no value), distinct from
+both `data-local-id="..."` (a real value, including an empty string) and no
+`data-local-id` attribute at all (the key was never there). Splice it
+through unchanged like any other local id; never write it by hand.
+
 An `<ol>` also takes the plain HTML `start` attribute for a list that does not
 begin at 1 - `<ol start="5">` - unlike a local id, this one an author might
 genuinely set by hand.
