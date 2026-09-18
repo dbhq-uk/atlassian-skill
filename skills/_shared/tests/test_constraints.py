@@ -459,7 +459,10 @@ class TestTokenNeverReachesProcessArgv(unittest.TestCase):
         import tempfile
 
         text = self.SETUP_SH.read_text(encoding="utf-8")
-        match = re.search(r'UMASK_OLD=\$\(umask\).*?> "\$CONFIG_FILE"\n', text, re.S)
+        match = re.search(
+            r'UMASK_OLD=\$\(umask\).*?mv "\$TMP_CONFIG" "\$CONFIG_FILE"\n',
+            text, re.S,
+        )
         self.assertIsNotNone(
             match,
             "atlassian-setup.sh's credential-write block has changed shape "
@@ -514,6 +517,63 @@ class TestTokenNeverReachesProcessArgv(unittest.TestCase):
                 secret, argv_text,
                 "the token reached jq's own argv - /proc/<pid>/cmdline "
                 "would have carried it in plain text",
+            )
+
+    def test_a_jq_failure_does_not_destroy_an_existing_credential(self):
+        import tempfile
+
+        text = self.SETUP_SH.read_text(encoding="utf-8")
+        match = re.search(
+            r'UMASK_OLD=\$\(umask\).*?mv "\$TMP_CONFIG" "\$CONFIG_FILE"\n',
+            text, re.S,
+        )
+        self.assertIsNotNone(match)
+        write_block = match.group(0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = pathlib.Path(tmp)
+            config_dir = tmp / "config"
+            config_dir.mkdir()
+            config_file = config_dir / "config.json"
+            existing = (
+                '{"site":"https://old.atlassian.net","email":"old@x.com",'
+                '"token":"old-token"}'
+            )
+            config_file.write_text(existing)
+
+            # A jq that always fails - a bad value, a crash, anything short
+            # of this process being killed outright (a signal is I2's
+            # trap's job, not this one's). Writing straight to $CONFIG_FILE
+            # with `jq ... > "$CONFIG_FILE"` truncates it the instant the
+            # shell opens that redirection, before jq runs at all - so a
+            # failure here used to destroy a working credential and leave
+            # nothing in its place.
+            fake_bin = tmp / "bin"
+            fake_bin.mkdir()
+            fake_jq = fake_bin / "jq"
+            fake_jq.write_text("#!/bin/bash\nexit 1\n")
+            fake_jq.chmod(0o755)
+
+            harness = (
+                'CONFIG_DIR="$1"; CONFIG_FILE="$2"; SITE="$3"; EMAIL="$4"; '
+                'TOKEN="$5"; CONFLUENCE="$6"\n' + write_block
+            )
+            result = subprocess.run(
+                ["bash", "-c", harness, "bash",
+                 str(config_dir), str(config_file),
+                 "https://new.atlassian.net", "new@example.com",
+                 "new-token", "yes"],
+                capture_output=True, text=True,
+                env={"PATH": f"{fake_bin}:{os.environ.get('PATH', '')}"},
+            )
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertEqual(
+                config_file.read_text(), existing,
+                "the existing credential was destroyed by a failed write",
+            )
+            leftovers = [p for p in config_dir.iterdir() if p != config_file]
+            self.assertEqual(
+                leftovers, [], f"leftover temp file(s): {leftovers}"
             )
 
 

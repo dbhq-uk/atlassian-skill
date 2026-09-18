@@ -32,7 +32,12 @@ Update then succeeded and returned version 2.
 - Update requires `id`, `status`, `title` and `version.number` set to the
   current version plus one. Omitting any of them fails.
 - A `taskList` and a `taskItem` each take a `localId` attribute. An empty
-  string is accepted and the server assigns one.
+  string is accepted and the server assigns one. **Superseded**: this
+  converter no longer sends an empty string for an absent `localId` - it
+  omits the key entirely, which is what makes a fetched page's real
+  assigned id round-trip correctly (an empty string sent back would not
+  match what Confluence returns, and would fail the round-trip gate on
+  every page with a task list on it).
 
 ## Consequence
 

@@ -129,16 +129,32 @@ fi
 mkdir -p "$CONFIG_DIR"
 chmod 700 "$CONFIG_DIR"
 UMASK_OLD=$(umask); umask 077
+# Written to a temp file and moved into place, not `jq ... > "$CONFIG_FILE"`
+# directly - that redirection truncates CONFIG_FILE the instant the shell
+# opens it, before jq ever runs, so a jq failure (or this process being
+# killed mid-write) would destroy a working credential and replace it with
+# nothing, not just fail to update it. mv within the same directory is
+# atomic, the same reasoning frontmatter.py's _write() already documents
+# for the file it rewrites.
+TMP_CONFIG=$(mktemp "$CONFIG_DIR/.config.json.XXXXXX")
+trap 'rm -f "$TMP_CONFIG"' EXIT INT TERM HUP
 # The token goes in through the environment (env.TOKEN), not --arg. jq's
 # argv is its own process's command line, and /proc/<pid>/cmdline is
 # world-readable - the exact leak the token-never-reaches-a-command-line
 # rule elsewhere in this repository exists to close. TOKEN="$TOKEN" sets it
 # only in this one child process's environment, which is not world-readable
 # the way its argv is.
-TOKEN="$TOKEN" jq -n --arg site "$SITE" --arg email "$EMAIL" --arg conf "$CONFLUENCE" \
-    '{site: $site, email: $email, token: env.TOKEN, confluence: ($conf == "yes")}' > "$CONFIG_FILE"
+if ! TOKEN="$TOKEN" jq -n --arg site "$SITE" --arg email "$EMAIL" --arg conf "$CONFLUENCE" \
+        '{site: $site, email: $email, token: env.TOKEN, confluence: ($conf == "yes")}' \
+        > "$TMP_CONFIG"; then
+    umask "$UMASK_OLD"
+    echo "Error: could not build the credential file - nothing was saved." >&2
+    echo "Fix: any existing credential at $CONFIG_FILE is untouched. Try again." >&2
+    exit 1
+fi
 umask "$UMASK_OLD"
-chmod 600 "$CONFIG_FILE"
+chmod 600 "$TMP_CONFIG"
+mv "$TMP_CONFIG" "$CONFIG_FILE"
 
 echo
 echo "Connected as $NAME ($ACCOUNT)."
