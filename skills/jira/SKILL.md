@@ -71,7 +71,7 @@ Every successful create prints the issue key and its browse URL.
 `--description-file` takes an HTML+ fragment in place of the plain-text `[description]`, so a description can carry a real panel, a syntax-highlighted code block and real checkboxes instead of a wall of text:
 
 ```bash
-${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh create PAY-12 Task "Confirm the egress address" \
+${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh create PAY Task "Confirm the egress address" \
     --description-file /tmp/desc.html
 ```
 

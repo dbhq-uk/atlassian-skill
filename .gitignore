@@ -13,3 +13,10 @@ __pycache__/
 .venv/
 .pytest_cache/
 .ruff_cache/
+
+# Agent scratch - review-round diffs and other working state. Previously
+# invisible only via a nested .superpowers/sdd/.gitignore ("*"), which is
+# the mechanism that failed when a mechanical sweep committed a partial
+# tree elsewhere. A top-level entry does not depend on a nested file
+# surviving.
+.superpowers/
