@@ -190,11 +190,15 @@ case "$CMD" in
         # earlier in the session: another person or job may have landed a
         # version in between, and sending a stale version number is the only
         # thing standing between a concurrent edit and silent data loss.
-        api GET "/wiki/api/v2/pages/$PAGE_ID"
+        # body-format=atlas_doc_format is requested here too (not a second
+        # call) so the same response also carries the body the round-trip
+        # gate below checks.
+        api GET "/wiki/api/v2/pages/$PAGE_ID?body-format=atlas_doc_format"
         api_ok || api_fail "$API_BODY" "reading page $PAGE_ID before update"
         CURRENT_VERSION=$(printf '%s' "$API_BODY" | jq -r '.version.number')
         CURRENT_TITLE=$(printf '%s' "$API_BODY" | jq -r '.title')
         CURRENT_STATUS=$(printf '%s' "$API_BODY" | jq -r '.status')
+        CURRENT_BODY=$(printf '%s' "$API_BODY" | jq -r '.body.atlas_doc_format.value')
 
         case "$CURRENT_VERSION" in
             ''|*[!0-9]*)
@@ -223,6 +227,23 @@ case "$CMD" in
             echo "Error: page $PAGE_ID has moved on since your base version." >&2
             echo "Cause: --base-version was $BASE_VERSION; the page is now at version $CURRENT_VERSION." >&2
             echo "Fix: read the page again, splice your change into what comes back, and pass --base-version $CURRENT_VERSION." >&2
+            exit 1
+        fi
+
+        # Round-trip gate. UPDATE REPLACES THE WHOLE BODY, so this write is
+        # only as safe as this converter's round-trip fidelity on the page
+        # actually being replaced - not just on whatever the caller's own
+        # edit touches. A page this converter cannot read back unchanged
+        # (a node type it has no HTML+ for at all, or a known type that
+        # silently drops an attribute or a mark) would otherwise convert to
+        # HTML+ for editing and then lose that content on the way back in,
+        # silently. There is no --force here: a page that fails this check
+        # needs a human decision, not a flag, and create has no existing
+        # page to lose, so it does not go through this gate.
+        if ! ROUNDTRIP_ERROR=$(printf '%s' "$CURRENT_BODY" | python3 "$HTMLPLUS" check-roundtrip 2>&1 1>/dev/null); then
+            echo "Error: page $PAGE_ID (\"$CURRENT_TITLE\") cannot be safely edited through this skill." >&2
+            echo "Cause: $ROUNDTRIP_ERROR" >&2
+            echo "Fix: nothing was sent. This page carries something this converter cannot round-trip exactly - editing it here risks silently losing part of it that your change never touched." >&2
             exit 1
         fi
 

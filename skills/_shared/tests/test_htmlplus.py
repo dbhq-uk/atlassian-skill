@@ -1,3 +1,4 @@
+import base64
 import json
 import pathlib
 import subprocess
@@ -9,6 +10,8 @@ sys.path.insert(0, str(SCRIPTS))
 
 from htmlplus import ConversionError, html_to_adf  # noqa: E402
 from htmlplus import adf_to_html, adf_to_markdown  # noqa: E402
+from htmlplus import _opaque_to_html, _opaque_mark_to_html  # noqa: E402
+from htmlplus import check_roundtrip  # noqa: E402
 
 
 class TestDocumentEnvelope(unittest.TestCase):
@@ -891,21 +894,25 @@ class TestOpaquePassthrough(unittest.TestCase):
         self.assertNotIn("adf-opaque", html)
         self.assertTrue(html.startswith('<div data-type="panel-info">'))
 
-    def test_5_opaque_node_inside_a_list_item_converts(self):
-        # listItem has real nesting rules (FORBIDDEN_CHILDREN rejects a
-        # heading, a table, a panel and more directly inside one) - rule 3
-        # says the validator does not inspect an opaque node's contents or
-        # reject it for its position, so it must convert regardless.
-        doc = {
-            "type": "doc", "version": 1,
-            "content": [
-                {"type": "bulletList", "content": [
-                    {"type": "listItem", "content": [self.EXTENSION_NODE]},
-                ]},
-            ],
-        }
-        html = adf_to_html(doc)
-        self.assertEqual(html_to_adf(html), doc)
+    def test_5_opaque_node_inside_a_code_block_converts(self):
+        # listItem was the brief's original fixture for this test, but
+        # "extension" is not in FORBIDDEN_CHILDREN["listItem"] - that
+        # fixture passed the validator regardless of whether the bypass
+        # existed, so it never actually exercised rule 3 (review finding).
+        # codeBlock is TEXT_ONLY: normally *any* non-text child is rejected
+        # there (test_status_cannot_sit_in_a_code_block covers a status
+        # node), so it is the container where the bypass is actually
+        # observable. An opaque node converts inside one; an ordinary
+        # ADF node with real nesting rules of its own - a rule - still
+        # doesn't, proving this is the opaque bypass and not a general
+        # loosening of codeBlock's content model.
+        opaque = _opaque_to_html(self.EXTENSION_NODE, tag="div")
+        doc = html_to_adf(f"<pre><code>{opaque}</code></pre>")
+        self.assertEqual(doc["content"][0]["type"], "codeBlock")
+        self.assertEqual(doc["content"][0]["content"][0], self.EXTENSION_NODE)
+        with self.assertRaises(ConversionError) as cm:
+            html_to_adf("<pre><code><hr></code></pre>")
+        self.assertIn("codeBlock", str(cm.exception))
 
     def test_6_adf_to_markdown_emits_a_placeholder_naming_the_type(self):
         doc = {
@@ -963,6 +970,150 @@ class TestOpaquePassthrough(unittest.TestCase):
         self.assertEqual(html_to_adf(html), doc)
 
 
+class TestOpaqueHardening(unittest.TestCase):
+    """Findings from the coordinator's review of Task 11b, verified fresh
+    rather than trusted: Critical 1 (silent content loss on an unclosed
+    opaque element) and Important 3-5 (data-adf validation, mark dedupe,
+    and the two numeric attrs _format_number missed).
+    """
+
+    def test_unclosed_opaque_node_raises_rather_than_silently_dropping_content(self):
+        # Critical 1. handle_data ignores everything while an opaque
+        # element is open (rule 6 - its content already travelled in
+        # data-adf). Before this fix, an unclosed opaque tag left that
+        # guard on for the rest of the fragment: every real paragraph
+        # after the break vanished silently, with a clean exit - and after
+        # the empty-content fix elsewhere in this task, the resulting empty
+        # paragraph looked exactly like an ordinary blank line.
+        opaque_open = _opaque_to_html(
+            {"type": "extension",
+             "attrs": {"extensionType": "com.atlassian.confluence.macro.core",
+                       "extensionKey": "com.example.macro", "parameters": {}}},
+            tag="div",
+        ).rsplit("</div>", 1)[0]
+        fragment = "<p>Keep.</p>" + opaque_open + "<p>This prose must survive.</p>"
+        with self.assertRaises(ConversionError) as cm:
+            html_to_adf(fragment)
+        self.assertIn("adf-opaque", str(cm.exception))
+
+    def test_unclosed_opaque_mark_raises(self):
+        # The same gap on the mark side - _opaque_mark_stack, not
+        # _opaque_stack - which the block case above cannot reach, since a
+        # mark never pushes onto builder.blocks at all.
+        mark_open = _opaque_mark_to_html(
+            {"type": "textColor", "attrs": {"color": "#ff0000"}}, ""
+        ).rsplit("</span>", 1)[0]
+        fragment = f"<p>{mark_open}x</p>"
+        with self.assertRaises(ConversionError) as cm:
+            html_to_adf(fragment)
+        self.assertIn("adf-opaque-mark", str(cm.exception))
+
+    def test_malformed_data_adf_raises_conversion_error_not_a_traceback(self):
+        # Important 3. Five ways data-adf can be broken, each of which
+        # reached the caller as a bare Python traceback (not the "Error:
+        # ..." message every other failure in this file produces) before
+        # _decode_adf wrapped them.
+        good = base64.b64encode(
+            json.dumps({"type": "extension", "attrs": {}}).encode("utf-8")
+        ).decode("ascii")
+        cases = {
+            "malformed base64": "not-valid-base64!!!",
+            "truncated base64": good[:-4],
+            "valid base64, not JSON": base64.b64encode(b"not json").decode("ascii"),
+            "non-ASCII in the attribute": "café",
+        }
+        for label, payload in cases.items():
+            with self.subTest(case=label):
+                fragment = f'<div data-type="adf-opaque" data-adf="{payload}"></div>'
+                with self.assertRaises(ConversionError) as cm:
+                    html_to_adf(fragment)
+                self.assertIn("data-adf", str(cm.exception))
+        with self.subTest(case="missing attribute"):
+            with self.assertRaises(ConversionError) as cm:
+                html_to_adf('<div data-type="adf-opaque"></div>')
+            self.assertIn("data-adf", str(cm.exception))
+
+    def test_valid_json_but_not_an_adf_node_or_mark_is_rejected(self):
+        # Important 3. A bare number, a list and null are all valid JSON,
+        # but none is "a JSON object with a type" - every node or mark
+        # _encode_adf ever produces is. Before this fix all three were
+        # accepted and built into the document with a clean exit.
+        for value in (123, [], None):
+            payload = base64.b64encode(json.dumps(value).encode("utf-8")).decode("ascii")
+            fragment = f'<div data-type="adf-opaque" data-adf="{payload}"></div>'
+            with self.subTest(value=value):
+                with self.assertRaises(ConversionError) as cm:
+                    html_to_adf(fragment)
+                self.assertIn("data-adf", str(cm.exception))
+
+    def test_two_opaque_marks_of_the_same_type_both_survive(self):
+        # Important 4. _current_marks deduped by type alone, harmless while
+        # an opaque mark never reached self.marks - but overlapping inline
+        # comments are exactly two "annotation" marks of the same type with
+        # different attrs (different comment ids) on one run of text, and
+        # deduping by type alone silently dropped every one but the first.
+        doc = {
+            "type": "doc", "version": 1,
+            "content": [
+                {"type": "paragraph", "content": [
+                    {"type": "text", "text": "flagged",
+                     "marks": [
+                         {"type": "annotation", "attrs": {"id": "comment-1"}},
+                         {"type": "annotation", "attrs": {"id": "comment-2"}},
+                     ]},
+                ]},
+            ],
+        }
+        html = adf_to_html(doc)
+        self.assertEqual(html.count('data-type="adf-opaque-mark"'), 2)
+        round_tripped = html_to_adf(html)
+        self.assertEqual(round_tripped, doc)
+        marks = round_tripped["content"][0]["content"][0]["marks"]
+        self.assertEqual(len(marks), 2)
+        self.assertEqual(
+            {m["attrs"]["id"] for m in marks}, {"comment-1", "comment-2"}
+        )
+
+    def test_colspan_rowspan_as_json_floats_round_trip(self):
+        # Important 5. Same root cause as table width/colwidth - a real
+        # page can return colspan/rowspan as a JSON float (2.0) - but
+        # colspan/rowspan had no _format_number treatment at all before
+        # this fix, so "2.0" reached the reverse parser's bare int(...)
+        # unguarded.
+        doc = {
+            "type": "doc", "version": 1,
+            "content": [
+                {"type": "table", "content": [
+                    {"type": "tableRow", "content": [
+                        {"type": "tableCell",
+                         "attrs": {"colspan": 2.0, "rowspan": 3.0},
+                         "content": [{"type": "paragraph",
+                                      "content": [{"type": "text", "text": "x"}]}]},
+                    ]},
+                ]},
+            ],
+        }
+        html = adf_to_html(doc)
+        self.assertIn('colspan="2"', html)
+        self.assertIn('rowspan="3"', html)
+        round_tripped = html_to_adf(html)
+        cell = round_tripped["content"][0]["content"][0]["content"][0]
+        self.assertEqual(cell["attrs"]["colspan"], 2)
+        self.assertEqual(cell["attrs"]["rowspan"], 3)
+
+    def test_non_integer_colspan_raises_conversion_error_not_a_traceback(self):
+        # Important 5. Before this fix, int(a["colspan"]) had no guard at
+        # all - a malformed value raised a bare ValueError that escaped
+        # main()'s ConversionError handling as a Python traceback.
+        with self.assertRaises(ConversionError) as cm:
+            html_to_adf(
+                '<table><tbody><tr><td colspan="2.5"><p>x</p></td></tr>'
+                "</tbody></table>"
+            )
+        self.assertIn("colspan", str(cm.exception))
+        self.assertIn("plain number", str(cm.exception))
+
+
 class TestAdfToMarkdown(unittest.TestCase):
     def test_paragraph_and_heading(self):
         doc = html_to_adf("<h2>Title</h2><p>Body.</p>")
@@ -1011,6 +1162,79 @@ class TestReverseCli(unittest.TestCase):
         r = self._run(["to-markdown"], adf)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(r.stdout.strip(), "## T")
+
+    def test_check_roundtrip_is_silent_and_exits_0_on_a_clean_document(self):
+        # Important 2. confluence-pages.sh's update gate tells "safe to
+        # write" from "refuse" by exit code alone - it must not have to
+        # parse stdout to find out.
+        adf = json.dumps(html_to_adf("<p>Hi.</p>"))
+        r = self._run(["check-roundtrip"], adf)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout, "")
+
+    def test_check_roundtrip_exits_1_naming_the_type_on_a_lossy_document(self):
+        # A known type (orderedList) whose "order" attr this converter has
+        # no HTML+ syntax for - dropped silently by adf_to_html, so the
+        # page round-trips to something different from what was fetched.
+        doc = {
+            "type": "doc", "version": 1,
+            "content": [
+                {"type": "orderedList", "attrs": {"order": 5}, "content": [
+                    {"type": "listItem", "content": [
+                        {"type": "paragraph",
+                         "content": [{"type": "text", "text": "x"}]},
+                    ]},
+                ]},
+            ],
+        }
+        r = self._run(["check-roundtrip"], json.dumps(doc))
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("orderedList", r.stderr)
+        self.assertTrue(r.stderr.startswith("Error:"))
+
+
+class TestRoundtripGate(unittest.TestCase):
+    """check_roundtrip itself (Important 2) - the function
+    confluence-pages.sh's update command gates a write on."""
+
+    def test_clean_document_is_ok(self):
+        doc = html_to_adf("<p><strong>Hi.</strong></p>")
+        ok, differing_type = check_roundtrip(doc)
+        self.assertTrue(ok)
+        self.assertIsNone(differing_type)
+
+    def test_lossy_known_type_is_not_ok_and_names_its_type(self):
+        doc = {
+            "type": "doc", "version": 1,
+            "content": [
+                {"type": "orderedList", "attrs": {"order": 5}, "content": [
+                    {"type": "listItem", "content": [
+                        {"type": "paragraph",
+                         "content": [{"type": "text", "text": "x"}]},
+                    ]},
+                ]},
+            ],
+        }
+        ok, differing_type = check_roundtrip(doc)
+        self.assertFalse(ok)
+        self.assertEqual(differing_type, "orderedList")
+
+    def test_opaque_passthrough_content_is_ok(self):
+        # The gate must not flag passthrough content as unsafe - that is
+        # the whole point of Task 11b: an unrecognised node or mark is
+        # exactly the case this converter now carries through exactly.
+        doc = {
+            "type": "doc", "version": 1,
+            "content": [
+                {"type": "extension", "attrs": {
+                    "extensionType": "com.atlassian.confluence.macro.core",
+                    "extensionKey": "com.example.macro", "parameters": {},
+                }},
+            ],
+        }
+        ok, differing_type = check_roundtrip(doc)
+        self.assertTrue(ok)
+        self.assertIsNone(differing_type)
 
 
 if __name__ == "__main__":

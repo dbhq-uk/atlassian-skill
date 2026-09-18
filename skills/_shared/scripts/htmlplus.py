@@ -182,15 +182,59 @@ def _date_to_timestamp(value):
     return str(epoch * 1000)
 
 
+def _parse_plain_number(raw, attr_name):
+    """A "plain number" HTML attribute as an int - ConversionError, not a
+    bare traceback, for anything int() cannot parse.
+
+    Shared by data-width, data-colwidth, colspan and rowspan. Only
+    data-colwidth had this check before Task 11b; colspan and rowspan went
+    straight to a bare int(a[key]) with nothing catching a malformed value,
+    so "colspan=2.0" - exactly the shape a real page's own JSON float
+    produces once rendered by _format_number's counterpart before this fix
+    existed - escaped html_to_adf's ConversionError handling as a raw
+    Python ValueError traceback, all the way out through main().
+    """
+    if not raw.isdigit():
+        raise ConversionError(
+            f'{attr_name}="{raw}" is not a plain number. Confluence drops '
+            f"anything else rather than coercing it. Write a plain whole "
+            f"number, never a unit and never a decimal point."
+        )
+    return int(raw)
+
+
 def _decode_adf(payload):
     """The exact node or mark an opaque HTML+ element's data-adf carried.
 
-    The mirror of _encode_adf, below the ADF-to-HTML+ direction. Kept next to
-    _date_to_timestamp rather than its mirror, matching how this file already
-    splits _date_to_timestamp (here) from _timestamp_to_iso (there) - each
-    helper lives with the parsing direction that calls it.
+    Raises ConversionError rather than letting a malformed attribute reach
+    the caller as a bare Python traceback - malformed or truncated base64,
+    non-ASCII characters, or base64 that decodes to something other than
+    JSON all take this path. Valid-but-wrong JSON is rejected too: every
+    ADF node and mark this converter ever writes is a JSON object with a
+    "type", so a bare number, a list or null did not come from _encode_adf
+    and is not safe to build into the document as if it had.
+
+    The mirror of _encode_adf, below the ADF-to-HTML+ direction. Kept next
+    to _date_to_timestamp rather than its mirror, matching how this file
+    already splits _date_to_timestamp (here) from _timestamp_to_iso
+    (there) - each helper lives with the parsing direction that calls it.
     """
-    return json.loads(base64.b64decode(payload.encode("ascii")).decode("utf-8"))
+    try:
+        raw = base64.b64decode(payload.encode("ascii"), validate=True)
+        value = json.loads(raw.decode("utf-8"))
+    except Exception as exc:
+        raise ConversionError(
+            f"data-adf is not valid base64-encoded ADF JSON ({exc}). An "
+            f"opaque element's data-adf attribute must be exactly what "
+            f"_encode_adf produced - hand-editing it is not supported."
+        )
+    if not isinstance(value, dict) or not isinstance(value.get("type"), str):
+        raise ConversionError(
+            'data-adf decoded to something other than an ADF node or mark '
+            '(a JSON object with a "type"). Hand-editing an opaque '
+            "element's data-adf attribute is not supported."
+        )
+    return value
 
 
 class _Builder(HTMLParser):
@@ -342,11 +386,18 @@ class _Builder(HTMLParser):
             )
 
     def _current_marks(self):
-        # A list of dicts, deduplicated by type, in the order they were opened.
+        # A list of dicts, deduplicated by (type, attrs), in the order they
+        # were opened. Deduping by type alone merged two different opaque
+        # marks of the same underlying ADF type into one text node's marks
+        # list, silently losing every one but the first - harmless while an
+        # opaque mark never reached self.marks, but overlapping inline
+        # comments are exactly this shape: two "annotation" marks, same
+        # type, different attrs (different comment ids), on the same run.
         out, seen = [], set()
         for m in self.marks:
-            if m["type"] not in seen:
-                seen.add(m["type"])
+            key = (m["type"], json.dumps(m.get("attrs"), sort_keys=True))
+            if key not in seen:
+                seen.add(key)
                 out.append(m)
         return out
 
@@ -492,7 +543,7 @@ class _Builder(HTMLParser):
         elif tag == "table":
             attrs_out = {}
             if "data-width" in a:
-                attrs_out["width"] = int(a["data-width"])
+                attrs_out["width"] = _parse_plain_number(a["data-width"], "data-width")
             if "data-layout" in a:
                 attrs_out["layout"] = a["data-layout"]
             if a.get("data-number-column") == "true":
@@ -522,16 +573,10 @@ class _Builder(HTMLParser):
             cell_attrs = {}
             raw = a.get("data-colwidth")
             if raw is not None:
-                if not raw.isdigit():
-                    raise ConversionError(
-                        f'data-colwidth="{raw}" is not a plain number. '
-                        f"Confluence drops anything else rather than coercing "
-                        f"it. Write 242, never 242px and never 50%."
-                    )
-                cell_attrs["colwidth"] = [int(raw)]
+                cell_attrs["colwidth"] = [_parse_plain_number(raw, "data-colwidth")]
             for key, attr in (("colspan", "colspan"), ("rowspan", "rowspan")):
                 if key in a:
-                    cell_attrs[attr] = int(a[key])
+                    cell_attrs[attr] = _parse_plain_number(a[key], key)
             frame = self._table_stack[-1]
             self._record_width(frame["cell_index"], raw)
             frame["cell_index"] += 1
@@ -714,6 +759,7 @@ def html_to_adf(fragment):
     builder = _Builder()
     builder.feed(fragment)
     builder.close()
+    unclosed = None
     if len(builder.blocks) > 1:
         # Anything left on the stack besides the document itself never saw
         # its closing tag. Emitting it anyway would hand Confluence a node
@@ -721,6 +767,17 @@ def html_to_adf(fragment):
         # nesting) - fail the whole conversion instead, generically, rather
         # than special-casing any one element.
         unclosed = builder.blocks[-1]["type"]
+    elif builder._opaque_stack:
+        # The same problem, one level down: an opaque node was never pushed
+        # onto builder.blocks (rule 6 - it has no editable children), so an
+        # unclosed one is invisible to the check above. Left uncaught,
+        # handle_data's "ignore everything while an opaque element is open"
+        # guard keeps swallowing text for the rest of the fragment - every
+        # paragraph after the break vanishes, silently, with a clean exit.
+        unclosed = ADF_OPAQUE
+    elif builder._opaque_mark_stack:
+        unclosed = ADF_OPAQUE_MARK
+    if unclosed:
         raise ConversionError(
             f'Unclosed "{unclosed}" element: the fragment ended before it '
             f"was closed. Every element that opens a block needs a "
@@ -792,17 +849,18 @@ def _format_number(value):
 
     Found measuring this converter against a live Confluence instance
     (Task 11b), unrelated to opaque passthrough itself but blocking the same
-    acceptance bar: real pages return table width and column width as a
-    JSON float even for whole-pixel values (1800.0, 200.0) - never what
-    html_to_adf itself writes, since it always stores int(raw), but exactly
-    what a fetched page carries on the way in. Rendered verbatim, that put
-    "1800.0" in a data-width attribute; handle_starttag's own int(...) two
-    hundred lines away cannot read that back, and data-colwidth's
-    raw.isdigit() check rejected it outright - so a table on a real page
-    converted to HTML+ and then failed to convert back, breaking exactly the
-    round trip this converter exists to guarantee. A whole-number float
-    renders as a plain integer; anything else is left alone rather than
-    guessed at.
+    acceptance bar: real pages return table width, column width, colspan and
+    rowspan as a JSON float even for whole values (1800.0, 200.0, 2.0) -
+    never what html_to_adf itself writes, since it always stores
+    _parse_plain_number(raw)'s int, but exactly what a fetched page carries
+    on the way in. Rendered verbatim, that put "1800.0" or "2.0" in an
+    attribute that is supposed to be a plain number; the parser's own
+    _parse_plain_number two hundred lines away cannot read that back - so a
+    table on a real page converted to HTML+ and then failed to convert back,
+    breaking exactly the round trip this converter exists to guarantee. A
+    whole-number float renders as a plain integer; anything else is left
+    alone rather than guessed at. Covers all four numeric attributes this
+    converter emits: width, colwidth, colspan, rowspan.
     """
     if isinstance(value, float) and value.is_integer():
         return str(int(value))
@@ -943,7 +1001,7 @@ def _node_to_html(node):
             bits.append(f'data-colwidth="{_format_number(a["colwidth"][0])}"')
         for key in ("colspan", "rowspan"):
             if key in a:
-                bits.append(f'{key}="{a[key]}"')
+                bits.append(f'{key}="{_format_number(a[key])}"')
         open_tag = f"<{tag}" + ("" if not bits else " " + " ".join(bits)) + ">"
         return f"{open_tag}{_children_html(node)}</{tag}>"
     if t == "layoutSection":
@@ -1079,9 +1137,73 @@ def adf_to_markdown(doc):
     )
 
 
+# --- the write-path round-trip gate ---
+
+def _first_roundtrip_difference(original, roundtripped):
+    """The ADF "type" of the node closest to where original and
+    roundtripped first disagree, or None if they are identical.
+
+    Walks both trees together and returns the type of the innermost node
+    still common to both paths when the walk hits a difference - never a
+    value, only the type name, so this is safe to put in a refusal message
+    without carrying page content into it.
+    """
+    def walk(a, b, nearest_type):
+        if isinstance(a, dict) and isinstance(b, dict):
+            here = a.get("type") if isinstance(a.get("type"), str) else nearest_type
+            if set(a.keys()) != set(b.keys()):
+                return here
+            for key in a:
+                diff = walk(a[key], b[key], here)
+                if diff is not None:
+                    return diff
+            return None
+        if isinstance(a, list) and isinstance(b, list):
+            if len(a) != len(b):
+                return nearest_type
+            for x, y in zip(a, b):
+                diff = walk(x, y, nearest_type)
+                if diff is not None:
+                    return diff
+            return None
+        if a != b:
+            return nearest_type
+        return None
+
+    return walk(original, roundtripped, None)
+
+
+def check_roundtrip(doc):
+    """(ok, differing_type) - whether doc survives adf_to_html then
+    html_to_adf unchanged, and if not, the ADF type nearest the first
+    place it does not.
+
+    The write-path gate this exists for: UPDATE REPLACES THE WHOLE BODY, so
+    a fetch/splice/verify update is only as safe as this converter's
+    round-trip fidelity on the page actually being replaced. Before Task
+    11b a page carrying an unrecognised node or mark simply refused to
+    convert at all - loud, but safe, since nothing was ever written. Opaque
+    passthrough lets those pages convert now; for the ones that still do
+    not round-trip byte-identical (a known type dropping an attr or a mark
+    this converter has no HTML+ for), that refusal has to be reproduced
+    deliberately here, or reading now succeeds where it used to fail and
+    writing silently drops whatever this converter could not carry through
+    - the exact failure Task 7 closed for an outright-unsupported node,
+    reappearing one level down for a partially-supported one. Does not
+    itself decide whether to write; that is confluence-pages.sh's call.
+    """
+    roundtripped = html_to_adf(adf_to_html(doc))
+    if roundtripped == doc:
+        return True, None
+    return False, _first_roundtrip_difference(doc, roundtripped) or "document"
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("command", choices=["to-adf", "to-html", "to-markdown"])
+    parser.add_argument(
+        "command",
+        choices=["to-adf", "to-html", "to-markdown", "check-roundtrip"],
+    )
     args = parser.parse_args(argv)
     try:
         if args.command == "to-adf":
@@ -1091,6 +1213,21 @@ def main(argv=None):
             sys.stdout.write(adf_to_html(json.load(sys.stdin)))
         elif args.command == "to-markdown":
             sys.stdout.write(adf_to_markdown(json.load(sys.stdin)))
+        elif args.command == "check-roundtrip":
+            # Reads the page's current ADF (exactly what the API returned)
+            # on stdin. Silent on success, so confluence-pages.sh's update
+            # gate can tell "safe to proceed" from "refuse" by exit code
+            # alone. A ConversionError raised during the conversion itself
+            # (an outright-unsupported node, or the colwidth-consistency
+            # check firing on a real page nobody edited) reaches the same
+            # except block below as a failure of this same kind - the page
+            # is not safe to write back either way.
+            ok, differing_type = check_roundtrip(json.load(sys.stdin))
+            if not ok:
+                raise ConversionError(
+                    f'a "{differing_type}" node does not survive converting '
+                    f"to HTML+ and back to ADF unchanged."
+                )
     except ConversionError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
