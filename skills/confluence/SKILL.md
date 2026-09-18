@@ -70,7 +70,7 @@ ${CLAUDE_SKILL_DIR}/scripts/confluence-pages.sh create \
   --parent 1234567 --body-file /tmp/body.html
 ```
 
-`--space` takes the numeric space **id** from `confluence-search.sh spaces`, not the key. A zero-byte or otherwise empty body file is refused before anything is sent - it would otherwise convert to a valid, empty document.
+`--space` takes the numeric space **id** from `confluence-search.sh spaces`, not the key. `--parent` is a page id and is validated the same way `read` and `update` validate theirs - anything non-numeric is refused before a request is built. A zero-byte or otherwise empty body file is refused before anything is sent - it would otherwise convert to a valid, empty document.
 
 ## Updating a page
 
@@ -105,7 +105,7 @@ Fix: read the page again, splice your change into what comes back, and pass --ba
 
 Do exactly that - read again, re-splice, update with the new version. Do not re-run the same command with the same body file; it was refused for a reason and nothing was sent.
 
-**Never invent an opaque id.** `data-id`, `data-collection`, `data-media-id` and inline-comment `data-annotation-id` all come from a fetch or from an upload step's output. A made-up one produces a broken node on a live page.
+**Never invent an opaque id.** `data-id`, `data-collection`, `data-media-id`, `data-resource-id` and inline-comment `data-annotation-id` all come from a fetch or from an upload step's output. A made-up one produces a broken node on a live page.
 
 ## What the converter does for you
 

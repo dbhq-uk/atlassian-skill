@@ -145,6 +145,7 @@ case "$CMD" in
             esac
         done
         [ -n "$SPACE" ] && [ -n "$TITLE" ] && [ -n "$BODY_FILE" ] || usage
+        [ -z "$PARENT" ] || require_numeric_page_id "$PARENT"
         require_body_file "$BODY_FILE"
         require_config
         VALUE=$(to_adf_string "$BODY_FILE")
