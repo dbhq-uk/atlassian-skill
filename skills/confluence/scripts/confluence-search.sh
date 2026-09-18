@@ -54,7 +54,17 @@ case "$CMD" in
         LIMIT="${3:-25}"
         require_config
         if [ "$CMD" = "text" ]; then
-            QUERY="type = page and text ~ \"$2\""
+            # Never splice $2 raw between literal quotes. An even number of
+            # embedded quotes does not error - it closes the string early and
+            # the rest becomes a second CQL clause. `text 'x" or type = page'`
+            # measured live: raw interpolation returned HTTP 200 with 2069
+            # results (every page) where the intended query matches zero. jq
+            # emits the literal already quoted and escaped; CQL's string
+            # escaping is a subset of JSON's, so @json output embeds directly
+            # and safely, and there is no failure mode where the query
+            # silently widens past what the words say.
+            ESCAPED=$(jq -rn --arg w "$2" '$w | @json')
+            QUERY="type = page and text ~ $ESCAPED"
         else
             QUERY="$2"
         fi
