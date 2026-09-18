@@ -298,7 +298,7 @@ directly in HTML+.
 
 ## Also from DBHQ
 
-Fourteen free agent skills, all of them installable from the same marketplace and
+Sixteen free agent skills, all of them installable from the same marketplace and
 all documented at **[skills.dbhq.uk](https://skills.dbhq.uk)**.
 
 | Skill | What it does |
