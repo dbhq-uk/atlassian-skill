@@ -13,6 +13,7 @@ Standard library only. No packages, no venv.
 """
 
 import argparse
+import base64
 import json
 import sys
 from html.parser import HTMLParser
@@ -40,6 +41,19 @@ PANEL_TYPES = {"info", "note", "success", "warning", "error"}
 STATUS_COLOURS = {"neutral", "purple", "blue", "red", "yellow", "green"}
 DECISION_STATES = {"DECIDED", "UNDECIDED"}
 CARD_TYPES = {"inline": "inlineCard", "block": "blockCard", "embed": "embedCard"}
+
+# Task 11b: opaque passthrough. An ADF node or mark this converter does not
+# know by name is carried through untouched rather than refused (a block or
+# inline node) or silently dropped (a mark) - see _opaque_to_html and
+# _opaque_mark_to_html below, and the _Builder branches that read the two
+# data-type values back. Real Confluence pages carry far more node and mark
+# types than this converter has named support for (media, extension,
+# textColor, alignment, breakout and more, measured against a live site) -
+# passthrough is the floor that lets any page be read and edited around the
+# parts this converter cannot yet render, not a replacement for adding named
+# support where it is worth having (Task 14 for mediaSingle/media).
+ADF_OPAQUE = "adf-opaque"
+ADF_OPAQUE_MARK = "adf-opaque-mark"
 
 # Column counts per layout. The number of <div data-type="column"> children
 # must match, or Confluence rejects the document.
@@ -168,6 +182,17 @@ def _date_to_timestamp(value):
     return str(epoch * 1000)
 
 
+def _decode_adf(payload):
+    """The exact node or mark an opaque HTML+ element's data-adf carried.
+
+    The mirror of _encode_adf, below the ADF-to-HTML+ direction. Kept next to
+    _date_to_timestamp rather than its mirror, matching how this file already
+    splits _date_to_timestamp (here) from _timestamp_to_iso (there) - each
+    helper lives with the parsing direction that calls it.
+    """
+    return json.loads(base64.b64decode(payload.encode("ascii")).decode("utf-8"))
+
+
 class _Builder(HTMLParser):
     """Walks HTML+ and builds an ADF content list.
 
@@ -192,6 +217,18 @@ class _Builder(HTMLParser):
         # another table's cell tracks its own columns without corrupting or
         # being corrupted by the columns of the table it sits in.
         self._table_stack = []
+        # Tag names of currently-open opaque (non-mark) elements, innermost
+        # last. Everything the node carries already travelled in its
+        # data-adf attribute, so nothing between the open and close tag is
+        # meaningful - handle_data ignores it and handle_endtag swallows the
+        # matching close tag rather than running it through the normal
+        # per-tag handling (which would otherwise pop the real open block,
+        # since "div" ordinarily closes one).
+        self._opaque_stack = []
+        # Mark objects pushed by an open <span data-type="adf-opaque-mark">,
+        # matched back out of self.marks by identity (not by type, the way
+        # INLINE_MARKS closes) when its </span> arrives - see handle_endtag.
+        self._opaque_mark_stack = []
 
     # --- helpers ---
 
@@ -263,7 +300,19 @@ class _Builder(HTMLParser):
 
     def _close(self):
         if len(self.blocks) > 1:
-            self.blocks.pop()
+            node = self.blocks.pop()
+            # _open always sets content=[] on the way in, so every closing
+            # block has the key - but a real fetched ADF document never
+            # carries an empty content list on any node, checked across a
+            # 40-page live sample (Task 11b): a childless node omits the key
+            # entirely rather than keeping it empty. Emitting <p></p> for an
+            # empty paragraph is correct HTML+; parsing that back in with an
+            # empty content=[] still attached, where the original had no
+            # content key at all, is not - it is the single most common
+            # cause of a real page failing to round-trip byte-identical
+            # (blank lines are ordinary paragraphs with nothing in them).
+            if not node["content"]:
+                del node["content"]
 
     def _record_width(self, index, raw):
         frame = self._table_stack[-1]
@@ -488,6 +537,26 @@ class _Builder(HTMLParser):
             frame["cell_index"] += 1
             self._open({"type": node_type, "attrs": cell_attrs})
 
+        elif tag in ("div", "span") and dtype == ADF_OPAQUE:
+            # Rule 3 (Task 11b): the nesting validator does not inspect an
+            # opaque node's contents and does not reject it for its position
+            # - it came from a real page, so it was already valid where it
+            # was. Appended straight to the open block's content rather than
+            # through _open/_append, which would run it past
+            # _check_nesting.
+            node = _decode_adf(a.get("data-adf", ""))
+            self.blocks[-1]["content"].append(node)
+            self._opaque_stack.append(tag)
+
+        elif tag == "span" and dtype == ADF_OPAQUE_MARK:
+            # An opaque mark wraps ordinary, editable HTML+ - only the mark
+            # itself is unrecognised, not the content it applies to (rule 5).
+            # Reuse the normal open-marks stack so wrapped text picks it up
+            # exactly the way a <strong> or <em> would.
+            mark = _decode_adf(a.get("data-adf", ""))
+            self.marks.append(mark)
+            self._opaque_mark_stack.append(mark)
+
         else:
             raise ConversionError(
                 f"<{tag}{' data-type=' + dtype if dtype else ''}> is not a "
@@ -495,6 +564,14 @@ class _Builder(HTMLParser):
             )
 
     def handle_endtag(self, tag):
+        if self._opaque_stack and self._opaque_stack[-1] == tag:
+            # The matching close of an opaque node's open tag - see the
+            # ADF_OPAQUE branch in handle_starttag. Swallowed rather than
+            # processed: an ordinary "div"/"span" close here would otherwise
+            # run through the generic handling below and pop the real open
+            # block, since this element never pushed one.
+            self._opaque_stack.pop()
+            return
         if tag in INLINE_MARKS and self.marks:
             for i in range(len(self.marks) - 1, -1, -1):
                 if self.marks[i]["type"] == INLINE_MARKS[tag]:
@@ -508,6 +585,15 @@ class _Builder(HTMLParser):
                 self._pending_status["attrs"]["text"].strip()
             )
             self._pending_status = None
+        elif tag == "span" and self._opaque_mark_stack:
+            # Matched by identity, not by type the way INLINE_MARKS closes -
+            # every opaque mark closes on the same tag ("span"), whatever its
+            # underlying ADF type, so there is no type-to-tag lookup to use.
+            mark = self._opaque_mark_stack.pop()
+            for i in range(len(self.marks) - 1, -1, -1):
+                if self.marks[i] is mark:
+                    self.marks.pop(i)
+                    break
         elif tag == "summary":
             self.blocks[-1]["attrs"]["title"] = (
                 self.blocks[-1]["attrs"]["title"].strip()
@@ -554,6 +640,10 @@ class _Builder(HTMLParser):
             self._close()
 
     def handle_data(self, data):
+        if self._opaque_stack:
+            # Nothing between an opaque node's open and close tag is
+            # meaningful - its content already travelled in data-adf.
+            return
         if self._in_card:
             # A smart link renders its anchor text from the target, so any
             # text inside the element is discarded rather than emitted.
@@ -648,6 +738,16 @@ _PANEL_LABELS = {"info": "Info", "note": "Note", "success": "Success",
 _LAYOUT_BY_COUNT = {1: "layout-section", 2: "layout-two-equal",
                     3: "layout-three-equal"}
 
+# The inline leaf types _inline_to_html already renders by name. Read by
+# _node_to_html's own fallback (Task 11b) to tell "a known inline type
+# reached in block position" - rare, arguably unreachable in a well-formed
+# tree, but the pre-existing behaviour this file already had - apart from
+# "a genuinely unrecognised type reached in block position", which now gets
+# the opaque <div> form rather than being handed to _inline_to_html, where
+# it would come back as a <span> and violate the block/inline distinction
+# opaque passthrough is supposed to preserve.
+_INLINE_LEAF_TYPES = {"text", "status", "date", "inlineCard", "hardBreak"}
+
 
 def _escape(text):
     return (text.replace("&", "&amp;").replace("<", "&lt;")
@@ -659,6 +759,65 @@ def _timestamp_to_iso(ms):
     return datetime.datetime.fromtimestamp(
         int(ms) / 1000, tz=datetime.timezone.utc
     ).strftime("%Y-%m-%d")
+
+
+def _encode_adf(value):
+    """A node or mark's complete ADF JSON, base64-encoded for an HTML+ attribute.
+
+    Base64 rather than escaped JSON, deliberately: ADF JSON carries a double
+    quote on every key, and an HTML attribute containing quotes is fragile
+    through any parser or editor that touches it. Base64 has no character
+    that means anything to HTML - and being unreadable is the right signal
+    that this is not something to hand-edit.
+    """
+    return base64.b64encode(
+        json.dumps(value, separators=(",", ":")).encode("utf-8")
+    ).decode("ascii")
+
+
+def _opaque_to_html(node, tag="div"):
+    """An unrecognised ADF node, carried through untouched (Task 11b).
+
+    tag is "div" for a node reached in block position - a direct child of a
+    block-content list - and "span" for one reached in inline position,
+    inside a paragraph, heading or similar. The position is what the caller
+    already knows; the node's type gives no clue either way, since it is by
+    definition one this converter does not recognise.
+    """
+    return f'<{tag} data-type="{ADF_OPAQUE}" data-adf="{_encode_adf(node)}"></{tag}>'
+
+
+def _format_number(value):
+    """A JSON number as a plain integer string, where that is safe.
+
+    Found measuring this converter against a live Confluence instance
+    (Task 11b), unrelated to opaque passthrough itself but blocking the same
+    acceptance bar: real pages return table width and column width as a
+    JSON float even for whole-pixel values (1800.0, 200.0) - never what
+    html_to_adf itself writes, since it always stores int(raw), but exactly
+    what a fetched page carries on the way in. Rendered verbatim, that put
+    "1800.0" in a data-width attribute; handle_starttag's own int(...) two
+    hundred lines away cannot read that back, and data-colwidth's
+    raw.isdigit() check rejected it outright - so a table on a real page
+    converted to HTML+ and then failed to convert back, breaking exactly the
+    round trip this converter exists to guarantee. A whole-number float
+    renders as a plain integer; anything else is left alone rather than
+    guessed at.
+    """
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def _opaque_mark_to_html(mark, inner):
+    """An unrecognised mark, wrapping content that stays normal and editable.
+
+    Only the mark is opaque (rule 5) - inner is whatever _inline_to_html
+    already rendered for the node this mark sits on, marks already applied
+    inside it, so wrapping it here is no different from wrapping it in a
+    <strong> or <em> tag.
+    """
+    return f'<span data-type="{ADF_OPAQUE_MARK}" data-adf="{_encode_adf(mark)}">{inner}</span>'
 
 
 def _inline_to_html(node):
@@ -682,6 +841,14 @@ def _inline_to_html(node):
             elif mt in _MARK_TAGS:
                 tag = _MARK_TAGS[mt]
                 out = f"<{tag}>{out}</{tag}>"
+            else:
+                # An unrecognised mark - textColor, alignment, breakout and
+                # more, measured against a live site (Task 11b). Previously
+                # silently dropped here: none of the branches above matched,
+                # so the mark simply never got applied and the run of text
+                # lost its formatting on every fetch, with no warning. Now
+                # wrapped instead, the same as a known mark, just opaquely.
+                out = _opaque_mark_to_html(mark, out)
         return out
     if t == "status":
         a = node["attrs"]
@@ -694,21 +861,19 @@ def _inline_to_html(node):
         return f'<a href="{node["attrs"]["url"]}" data-card-appearance="inline"></a>'
     if t == "hardBreak":
         return "<br>"
-    # Reached for any ADF node type this converter does not know how to
-    # render - both a genuinely unrecognised block type falling through
-    # _node_to_html's chain, and an unrecognised inline leaf. A real fetched
-    # Confluence page can carry node types this converter has no HTML+ for
-    # (media, mention, emoji, extension, nestedExpand and more) - html_to_adf
-    # already refuses an unrecognised HTML tag, so the reverse path has to
-    # refuse symmetrically rather than silently drop the node: this feeds
-    # the write-back path of fetch/splice/verify, and a page this converter
-    # cannot faithfully round-trip is a page it must not be allowed to
-    # overwrite.
-    raise ConversionError(
-        f'ADF node type "{t}" is not supported by this converter, so this '
-        f'page cannot be safely edited through this skill until support '
-        f'for "{t}" is added.'
-    )
+    # Reached for any inline ADF node type this converter does not know how
+    # to render. Until Task 11b this raised: a real fetched Confluence page
+    # can carry node types this converter has no HTML+ for (media, mention,
+    # emoji, extension, nestedExpand and more, measured against a live
+    # site), and refusing rather than silently dropping the node was the
+    # right call while the only alternative was dropping it. Passthrough is
+    # strictly better than both: the node is carried through untouched, so
+    # reading is never refused and nothing is lost on the write-back path
+    # either. Its own content is not reachable through this converter in
+    # this version - the whole node is one opaque blob (rule 6) - which is a
+    # known limit, not worked around here: a bodiedExtension holding
+    # editable prose cannot be edited through this converter yet.
+    return _opaque_to_html(node, tag="span")
 
 
 def _children_html(node):
@@ -760,7 +925,7 @@ def _node_to_html(node):
     if t == "table":
         bits = []
         if "width" in a:
-            bits.append(f'data-width="{a["width"]}"')
+            bits.append(f'data-width="{_format_number(a["width"])}"')
         if "layout" in a:
             bits.append(f'data-layout="{a["layout"]}"')
         if a.get("isNumberColumnEnabled"):
@@ -775,7 +940,7 @@ def _node_to_html(node):
         tag = "td" if t == "tableCell" else "th"
         bits = []
         if "colwidth" in a:
-            bits.append(f'data-colwidth="{a["colwidth"][0]}"')
+            bits.append(f'data-colwidth="{_format_number(a["colwidth"][0])}"')
         for key in ("colspan", "rowspan"):
             if key in a:
                 bits.append(f'{key}="{a[key]}"')
@@ -790,7 +955,19 @@ def _node_to_html(node):
     if t in ("blockCard", "embedCard"):
         appearance = "block" if t == "blockCard" else "embed"
         return f'<a href="{a["url"]}" data-card-appearance="{appearance}"></a>'
-    return _inline_to_html(node)
+    if t in _INLINE_LEAF_TYPES:
+        # A known inline leaf type reached in block position. Not something
+        # a well-formed ADF tree produces - text/status/date/inlineCard/
+        # hardBreak only ever sit inside a paragraph, heading or similar,
+        # never as a direct child of a block-content list - but this is the
+        # pre-existing fallback for it, kept rather than removed.
+        return _inline_to_html(node)
+    # A genuinely unrecognised type in block position - Task 11b passthrough,
+    # carried through untouched as an opaque <div>. Checked after
+    # _INLINE_LEAF_TYPES so a known inline type never gets wrapped as opaque
+    # here, and delegates to _inline_to_html's own fallback (a <span>)
+    # instead, only when reached that way.
+    return _opaque_to_html(node)
 
 
 def adf_to_html(doc):

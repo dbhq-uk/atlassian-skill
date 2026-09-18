@@ -754,13 +754,22 @@ class TestRoundTrip(unittest.TestCase):
 
 
 class TestUnsupportedAdfNode(unittest.TestCase):
-    """Finding 1 (review, Task 7): a node type this converter cannot render.
+    """A node type this converter cannot render by name.
 
     A real fetched Confluence page can carry node types this converter has
     no HTML+ for - media, mention, emoji, extension and more. There is no
     HTML+ syntax to construct one through html_to_adf, so these ADF
     documents are built directly, the way a page fetched from the API would
     arrive.
+
+    Finding 1 (review, Task 7) made adf_to_html raise here rather than
+    silently drop the node - correct at the time, because the only other
+    behaviour on offer was dropping it. Task 11b (this file) replaces that
+    with opaque passthrough, which is strictly better than either: nothing
+    is refused and nothing is lost. test_adf_to_html_refuses_rather_than_
+    drop_the_node asserted the Task 7 raise; it is replaced below by
+    test_adf_to_html_no_longer_raises_carries_the_node_through_opaque,
+    which asserts the Task 7 behaviour is deliberately gone (brief test 9).
     """
 
     UNSUPPORTED_DOC = {
@@ -777,14 +786,19 @@ class TestUnsupportedAdfNode(unittest.TestCase):
         ],
     }
 
-    def test_adf_to_html_refuses_rather_than_drop_the_node(self):
-        # It feeds the write path (fetch, splice, verify, write back), so
-        # silently dropping content there is the one outcome worse than a
-        # hard failure - refusing means the page is never overwritten with
-        # data missing.
-        with self.assertRaises(ConversionError) as cm:
-            adf_to_html(self.UNSUPPORTED_DOC)
-        self.assertIn("mediaSingle", str(cm.exception))
+    def test_adf_to_html_no_longer_raises_carries_the_node_through_opaque(self):
+        # Brief test 9. Until Task 11b this raised ConversionError - the
+        # exact opposite of the assertion below - because the only
+        # alternative on offer at the time was silently dropping the node.
+        # Passthrough removes that trade-off: the unrecognised node is
+        # carried through as opaque HTML+ instead of being refused, and the
+        # two surrounding paragraphs are untouched.
+        html = adf_to_html(self.UNSUPPORTED_DOC)
+        self.assertIn('data-type="adf-opaque"', html)
+        self.assertIn("Before.", html)
+        self.assertIn("After.", html)
+        # And it reads back to the exact node it came from.
+        self.assertEqual(html_to_adf(html), self.UNSUPPORTED_DOC)
 
     def test_adf_to_markdown_marks_the_gap_instead_of_raising(self):
         # Documented one-way and read-only, never written back, so there is
@@ -794,6 +808,159 @@ class TestUnsupportedAdfNode(unittest.TestCase):
         self.assertIn("Before.", md)
         self.assertIn("[unsupported node: mediaSingle]", md)
         self.assertIn("After.", md)
+
+
+class TestOpaquePassthrough(unittest.TestCase):
+    """Task 11b: an unrecognised ADF node or mark is carried through
+    untouched rather than refused (a node) or silently dropped (a mark).
+
+    Fixtures here are invented, not lifted from any real page - an
+    extension always carries extensionKey "com.example.macro", and media
+    ids/collections are placeholder strings. See task-11b-brief.md, whose
+    numbered test list this class follows one test per number (skipping 9,
+    which lives on TestUnsupportedAdfNode above, and 6's exact-format
+    variant, which already existed on TestUnsupportedAdfNode too).
+    """
+
+    EXTENSION_NODE = {
+        "type": "extension",
+        "attrs": {
+            "extensionType": "com.atlassian.confluence.macro.core",
+            "extensionKey": "com.example.macro",
+            "parameters": {"macroParams": {"exampleParam": {"value": "42"}}},
+        },
+    }
+
+    def test_1_unknown_block_node_round_trips_byte_identical(self):
+        doc = {"type": "doc", "version": 1, "content": [self.EXTENSION_NODE]}
+        html = adf_to_html(doc)
+        self.assertTrue(html.startswith('<div data-type="adf-opaque"'))
+        self.assertEqual(html_to_adf(html), doc)
+
+    def test_2_unknown_inline_node_inside_a_paragraph_round_trips(self):
+        doc = {
+            "type": "doc", "version": 1,
+            "content": [
+                {"type": "paragraph", "content": [
+                    {"type": "text", "text": "Assigned to "},
+                    {"type": "mention",
+                     "attrs": {"id": "example-user-1", "text": "@Example Person"}},
+                    {"type": "text", "text": "."},
+                ]},
+            ],
+        }
+        html = adf_to_html(doc)
+        self.assertIn('<span data-type="adf-opaque"', html)
+        self.assertEqual(html_to_adf(html), doc)
+
+    def test_3_unknown_mark_round_trips_wrapped_text_stays_editable(self):
+        doc = {
+            "type": "doc", "version": 1,
+            "content": [
+                {"type": "paragraph", "content": [
+                    {"type": "text", "text": "at risk",
+                     "marks": [{"type": "textColor", "attrs": {"color": "#ff0000"}}]},
+                ]},
+            ],
+        }
+        html = adf_to_html(doc)
+        self.assertIn('data-type="adf-opaque-mark"', html)
+        # The wrapped text is plain HTML+, not base64 - readable and editable.
+        self.assertIn(">at risk<", html)
+        round_tripped = html_to_adf(html)
+        self.assertEqual(round_tripped, doc)
+        text_node = round_tripped["content"][0]["content"][0]
+        self.assertEqual(text_node["type"], "text")
+        self.assertEqual(text_node["text"], "at risk")
+
+    def test_4_known_type_with_unknown_attrs_is_unaffected(self):
+        # Passthrough must trigger on an unrecognised type, never on merely
+        # unrecognised attrs of a type this converter already knows how to
+        # render - or every panel gains a future attribute this converter
+        # has not been taught yet becomes opaque instead of a panel.
+        doc = {
+            "type": "doc", "version": 1,
+            "content": [
+                {"type": "panel",
+                 "attrs": {"panelType": "info", "futureAttr": "not yet named"},
+                 "content": [{"type": "paragraph",
+                              "content": [{"type": "text", "text": "x"}]}]},
+            ],
+        }
+        html = adf_to_html(doc)
+        self.assertNotIn("adf-opaque", html)
+        self.assertTrue(html.startswith('<div data-type="panel-info">'))
+
+    def test_5_opaque_node_inside_a_list_item_converts(self):
+        # listItem has real nesting rules (FORBIDDEN_CHILDREN rejects a
+        # heading, a table, a panel and more directly inside one) - rule 3
+        # says the validator does not inspect an opaque node's contents or
+        # reject it for its position, so it must convert regardless.
+        doc = {
+            "type": "doc", "version": 1,
+            "content": [
+                {"type": "bulletList", "content": [
+                    {"type": "listItem", "content": [self.EXTENSION_NODE]},
+                ]},
+            ],
+        }
+        html = adf_to_html(doc)
+        self.assertEqual(html_to_adf(html), doc)
+
+    def test_6_adf_to_markdown_emits_a_placeholder_naming_the_type(self):
+        doc = {
+            "type": "doc", "version": 1,
+            "content": [
+                {"type": "paragraph", "content": [{"type": "text", "text": "Before."}]},
+                self.EXTENSION_NODE,
+                {"type": "paragraph", "content": [{"type": "text", "text": "After."}]},
+            ],
+        }
+        md = adf_to_markdown(doc)
+        self.assertIn("Before.", md)
+        self.assertIn("extension", md)
+        self.assertIn("After.", md)
+
+    def test_7_opaque_node_survives_two_full_round_trips(self):
+        doc = {"type": "doc", "version": 1, "content": [self.EXTENSION_NODE]}
+        once = html_to_adf(adf_to_html(doc))
+        twice = html_to_adf(adf_to_html(once))
+        self.assertEqual(once, doc)
+        self.assertEqual(twice, doc)
+
+    def test_8_realistic_composite_round_trips_byte_identical(self):
+        # Paragraphs, a table, an extension and a media node at block
+        # position, and an unrecognised mark at inline position, all in one
+        # document - the mix a real page actually carries.
+        doc = {
+            "type": "doc", "version": 1,
+            "content": [
+                {"type": "paragraph", "content": [{"type": "text", "text": "Overview."}]},
+                {"type": "table", "attrs": {"width": 400}, "content": [
+                    {"type": "tableRow", "content": [
+                        {"type": "tableCell", "attrs": {}, "content": [
+                            {"type": "paragraph", "content": [
+                                {"type": "text", "text": "Status: "},
+                                {"type": "text", "text": "at risk",
+                                 "marks": [{"type": "textColor",
+                                            "attrs": {"color": "#ff0000"}}]},
+                            ]},
+                        ]},
+                    ]},
+                ]},
+                self.EXTENSION_NODE,
+                {"type": "mediaSingle", "attrs": {"layout": "center"}, "content": [
+                    {"type": "media", "attrs": {
+                        "type": "file",
+                        "id": "11111111-1111-1111-1111-111111111111",
+                        "collection": "example-collection",
+                    }},
+                ]},
+                {"type": "paragraph", "content": [{"type": "text", "text": "End."}]},
+            ],
+        }
+        html = adf_to_html(doc)
+        self.assertEqual(html_to_adf(html), doc)
 
 
 class TestAdfToMarkdown(unittest.TestCase):
