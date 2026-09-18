@@ -82,10 +82,10 @@ class TestFrontmatter(unittest.TestCase):
 
 
 class TestFrontmatterEdgeCases(unittest.TestCase):
-    """Cases the brief's own fixtures do not exercise.
+    """Cases the fixtures above do not exercise.
 
-    Task 13's brief was written before this converter's write path had to
-    think about anything other than a clean, LF, single-block source file.
+    Those were written before this converter's write path had to think
+    about anything other than a clean, LF, single-block source file.
     Each test here is a way a real file on disk differs from that: no
     frontmatter, a sibling key the writer must not touch, no confluence key
     at all yet, a confluence block that is not the last thing in the
@@ -116,7 +116,7 @@ class TestFrontmatterEdgeCases(unittest.TestCase):
         self.assertTrue(text.endswith("Just a body.\n"))
 
     def test_write_page_id_preserves_a_sibling_key_it_never_reads(self):
-        # BOUND's own title: key is a fixture detail the brief's tests never
+        # BOUND's own title: key is a fixture detail the tests above never
         # actually assert on - only space/parent/page_id are checked there.
         path = self._write(BOUND)
         write_page_id(path, "5555555")
@@ -219,7 +219,7 @@ class TestFrontmatterEdgeCases(unittest.TestCase):
         self.assertEqual(read_binding(path)["space"], "98765")
 
     def test_write_page_id_is_idempotent_on_a_second_call(self):
-        # The brief's own idempotency test only exercises the short-circuit
+        # The idempotency test above only exercises the short-circuit
         # on a file that already carried the id when it was written. This
         # exercises the write path itself first, then checks a second call
         # with the same id changes nothing further.
