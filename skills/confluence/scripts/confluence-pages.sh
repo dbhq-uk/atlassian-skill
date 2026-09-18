@@ -21,28 +21,80 @@ Usage:
   confluence-pages.sh create --space <space-id> --title <title> \
                              --body-file <file.html> [--parent <page-id>]
   confluence-pages.sh update <page-id> --body-file <file.html> \
+                             --base-version <n> \
                              [--title <title>] [--message <version message>]
 
 The body file holds a Confluence HTML+ fragment. Read
 _shared/references/html-patterns.md before writing one.
 
-UPDATE REPLACES THE WHOLE BODY. Always:
-  1. read the page immediately before writing, in --format html
+--format markdown is one-way, for reading only. It exists so a page is easy
+to skim; there is no markdown-to-ADF path, and writing a markdown render back
+to a page would destroy every native component on it (a panel, a status
+lozenge, a task list). Edit in --format html and update with that.
+
+UPDATE REPLACES THE WHOLE BODY. The script enforces the safe route rather
+than just recommending it:
+  1. read the page immediately before writing, in --format html - it prints
+     "pass --base-version N to update"
   2. splice your change into what came back
-  3. update, then read it again and check the section you changed
+  3. update, passing that same --base-version. If the page has moved on
+     since your read, the update refuses instead of overwriting the change
+     you have not seen.
 USAGE
     exit 1
+}
+
+# require_numeric_page_id <value> - a Confluence page id is always numeric.
+# Anything else is refused here rather than reaching api(), which builds it
+# into a curl config file: a page id carrying a `"` or a newline can break
+# out of that file and inject a second, attacker-chosen request that still
+# carries the site's credentials. api() in _common.sh refuses the same shape
+# independently, so this check existing or not is not what makes the request
+# safe - but failing here gives a clearer message than a generic refusal
+# deeper in the call chain, and a page id was never going to be anything but
+# digits in the first place.
+require_numeric_page_id() {
+    case "$1" in
+        ''|*[!0-9]*)
+            echo "Error: '$1' is not a valid page id." >&2
+            echo "Cause: a Confluence page id is always numeric." >&2
+            echo "Fix: pass the numeric id printed by 'read' or 'create', e.g. 1234567." >&2
+            exit 1
+            ;;
+    esac
+}
+
+# require_body_file <path> - the file must exist and must not be empty. A
+# zero-byte file converts to a well-formed but empty ADF document
+# ({"type":"doc","version":1,"content":[]}), which is a valid payload as far
+# as the API is concerned - so a failed redirect or a truncated write would
+# otherwise reach `update` and silently blank a live page.
+require_body_file() {
+    [ -f "$1" ] || { echo "Error: no such file: $1" >&2; exit 1; }
+    [ -s "$1" ] || {
+        echo "Error: $1 is empty." >&2
+        echo "Cause: a zero-byte body file converts to a valid but empty document, which would blank the page." >&2
+        echo "Fix: check the file has content. Nothing was sent." >&2
+        exit 1
+    }
 }
 
 # to_adf_string <html-file> - convert HTML+ to ADF and emit it as the JSON
 # STRING the v2 API wants in body.value. It is a string containing JSON, not a
 # nested object, and sending an object is what produces "400 Invalid".
 to_adf_string() {
-    local adf
+    local adf content_length
     adf=$(python3 "$HTMLPLUS" to-adf < "$1") || {
         echo "Fix: correct the body and try again. Nothing was sent." >&2
         exit 1
     }
+    content_length=$(printf '%s' "$adf" | jq -r '.content | length')
+    if [ "$content_length" = "0" ]; then
+        echo "Error: $1 converted to an empty document." >&2
+        echo "Cause: htmlplus.py returned {\"content\":[]} - the file parsed but carries nothing to publish." >&2
+        echo "Fix: check the file has content. Nothing was sent." >&2
+        exit 1
+    fi
     printf '%s' "$adf" | jq -Rs .
 }
 
@@ -52,27 +104,31 @@ case "$CMD" in
     read)
         PAGE_ID="${1:-}"; shift || true
         [ -n "$PAGE_ID" ] || usage
+        require_numeric_page_id "$PAGE_ID"
         FORMAT="html"
         while [ $# -gt 0 ]; do
             case "$1" in
-                --format) FORMAT="${2:-}"; shift 2 ;;
+                --format) [ $# -ge 2 ] || usage; FORMAT="$2"; shift 2 ;;
                 *) usage ;;
             esac
         done
+        case "$FORMAT" in
+            html|markdown|adf) ;;
+            *) echo "Error: --format must be html, markdown or adf." >&2; exit 1 ;;
+        esac
         require_config
         api GET "/wiki/api/v2/pages/$PAGE_ID?body-format=atlas_doc_format"
         api_ok || api_fail "$API_BODY" "reading page $PAGE_ID"
         TITLE=$(printf '%s' "$API_BODY" | jq -r '.title')
         VERSION=$(printf '%s' "$API_BODY" | jq -r '.version.number')
         echo "# $TITLE"
-        echo "# page id $PAGE_ID, version $VERSION"
+        echo "# page id $PAGE_ID, version $VERSION - pass --base-version $VERSION to update"
         echo
         BODY=$(printf '%s' "$API_BODY" | jq -r '.body.atlas_doc_format.value')
         case "$FORMAT" in
             adf)      printf '%s' "$BODY" | jq . ;;
             markdown) printf '%s' "$BODY" | python3 "$HTMLPLUS" to-markdown ;;
             html)     printf '%s' "$BODY" | python3 "$HTMLPLUS" to-html ;;
-            *) echo "Error: --format must be html, markdown or adf." >&2; exit 1 ;;
         esac
         echo
         ;;
@@ -81,15 +137,15 @@ case "$CMD" in
         SPACE=""; TITLE=""; PARENT=""; BODY_FILE=""
         while [ $# -gt 0 ]; do
             case "$1" in
-                --space)     SPACE="${2:-}";     shift 2 ;;
-                --title)     TITLE="${2:-}";     shift 2 ;;
-                --parent)    PARENT="${2:-}";    shift 2 ;;
-                --body-file) BODY_FILE="${2:-}"; shift 2 ;;
+                --space)     [ $# -ge 2 ] || usage; SPACE="$2";     shift 2 ;;
+                --title)     [ $# -ge 2 ] || usage; TITLE="$2";     shift 2 ;;
+                --parent)    [ $# -ge 2 ] || usage; PARENT="$2";    shift 2 ;;
+                --body-file) [ $# -ge 2 ] || usage; BODY_FILE="$2"; shift 2 ;;
                 *) usage ;;
             esac
         done
         [ -n "$SPACE" ] && [ -n "$TITLE" ] && [ -n "$BODY_FILE" ] || usage
-        [ -f "$BODY_FILE" ] || { echo "Error: no such file: $BODY_FILE" >&2; exit 1; }
+        require_body_file "$BODY_FILE"
         require_config
         VALUE=$(to_adf_string "$BODY_FILE")
         PAYLOAD=$(jq -n --arg s "$SPACE" --arg t "$TITLE" --arg p "$PARENT" \
@@ -107,17 +163,26 @@ case "$CMD" in
     update)
         PAGE_ID="${1:-}"; shift || true
         [ -n "$PAGE_ID" ] || usage
-        BODY_FILE=""; TITLE=""; MESSAGE="Updated by the confluence skill"
+        require_numeric_page_id "$PAGE_ID"
+        BODY_FILE=""; TITLE=""; MESSAGE="Updated by the confluence skill"; BASE_VERSION=""
         while [ $# -gt 0 ]; do
             case "$1" in
-                --body-file) BODY_FILE="${2:-}"; shift 2 ;;
-                --title)     TITLE="${2:-}";     shift 2 ;;
-                --message)   MESSAGE="${2:-}";   shift 2 ;;
+                --body-file)     [ $# -ge 2 ] || usage; BODY_FILE="$2";     shift 2 ;;
+                --base-version)  [ $# -ge 2 ] || usage; BASE_VERSION="$2";  shift 2 ;;
+                --title)         [ $# -ge 2 ] || usage; TITLE="$2";         shift 2 ;;
+                --message)       [ $# -ge 2 ] || usage; MESSAGE="$2";       shift 2 ;;
                 *) usage ;;
             esac
         done
-        [ -n "$BODY_FILE" ] || usage
-        [ -f "$BODY_FILE" ] || { echo "Error: no such file: $BODY_FILE" >&2; exit 1; }
+        # --base-version is required, with no default and no inference. The
+        # pre-read below makes the version number correct at the instant of
+        # the write - it says nothing about whether the body being sent was
+        # ever based on that version. Only the caller knows which version
+        # their edit started from, so only the caller can supply it; a
+        # missing value refuses rather than silently proceeding on the
+        # version the pre-read happens to find.
+        [ -n "$BODY_FILE" ] && [ -n "$BASE_VERSION" ] || usage
+        require_body_file "$BODY_FILE"
         require_config
 
         # Read the CURRENT version immediately before writing. Not a copy read
@@ -129,6 +194,37 @@ case "$CMD" in
         CURRENT_VERSION=$(printf '%s' "$API_BODY" | jq -r '.version.number')
         CURRENT_TITLE=$(printf '%s' "$API_BODY" | jq -r '.title')
         CURRENT_STATUS=$(printf '%s' "$API_BODY" | jq -r '.status')
+
+        case "$CURRENT_VERSION" in
+            ''|*[!0-9]*)
+                echo "Error: could not read a valid version number for page $PAGE_ID." >&2
+                echo "Cause: the API response had version.number = ${CURRENT_VERSION:-<empty>}." >&2
+                echo "Fix: check the page id and try again." >&2
+                exit 1
+                ;;
+        esac
+        if [ -z "$CURRENT_STATUS" ] || [ "$CURRENT_STATUS" = "null" ]; then
+            echo "Error: could not read a status for page $PAGE_ID." >&2
+            echo "Cause: the API response had status = ${CURRENT_STATUS:-<empty>}." >&2
+            echo "Fix: check the page id and try again." >&2
+            exit 1
+        fi
+
+        # The version this update is based on must still be current. This is
+        # the actual stale-write guard: the pre-read above only makes the
+        # version number correct at the instant of the write, which says
+        # nothing about whether the BODY being sent was composed against a
+        # version that has since moved on. If --base-version does not match
+        # what the page is on right now, somebody else's edit landed while
+        # this body was being written, and sending anyway would silently
+        # discard it.
+        if [ "$BASE_VERSION" != "$CURRENT_VERSION" ]; then
+            echo "Error: page $PAGE_ID has moved on since your base version." >&2
+            echo "Cause: --base-version was $BASE_VERSION; the page is now at version $CURRENT_VERSION." >&2
+            echo "Fix: read the page again, splice your change into what comes back, and pass --base-version $CURRENT_VERSION." >&2
+            exit 1
+        fi
+
         [ -n "$TITLE" ] || TITLE="$CURRENT_TITLE"
         NEXT_VERSION=$((CURRENT_VERSION + 1))
 
@@ -141,10 +237,25 @@ case "$CMD" in
              body: {representation: "atlas_doc_format", value: $v}}')
         api PUT "/wiki/api/v2/pages/$PAGE_ID" "$PAYLOAD"
         if ! api_ok; then
-            if [ "$API_STATUS" = "409" ]; then
+            # A version conflict is not always a literal 409: Confluence has
+            # been observed to answer a stale version with a 412, and with a
+            # 400 whose body names the version field rather than the status
+            # line. All three get the same refusal, because the one thing
+            # that matters - do not retry this exact command - is the same
+            # in every case.
+            CONFLICT=0
+            case "$API_STATUS" in
+                409|412) CONFLICT=1 ;;
+                400)
+                    if printf '%s' "$API_BODY" | grep -qi 'version'; then
+                        CONFLICT=1
+                    fi
+                    ;;
+            esac
+            if [ "$CONFLICT" = "1" ]; then
                 echo "Error: page $PAGE_ID changed while you were working on it." >&2
-                echo "Cause: it is no longer at version $CURRENT_VERSION." >&2
-                echo "Fix: read it again, splice your change into the new body, and retry." >&2
+                echo "Cause: it is no longer at version $CURRENT_VERSION (HTTP $API_STATUS)." >&2
+                echo "Fix: do not re-run this command with the same body file. Read the page again, splice your change into what comes back, and pass the new --base-version." >&2
                 exit 1
             fi
             api_fail "$API_BODY" "updating page $PAGE_ID"

