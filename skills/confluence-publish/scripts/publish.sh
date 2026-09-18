@@ -96,22 +96,50 @@ SPACE="${FM_SPACE:-$SPACE_ARG}"
 PARENT="${FM_PARENT:-$PARENT_ARG}"
 PAGE_ID="$FM_PAGE_ID"
 
-# --- Title: the first H1, else the filename ---
-TITLE=$(grep -m1 '^# ' "$FILE" | sed 's/^# //' || true)
-[ -n "$TITLE" ] || TITLE=$(basename "$FILE" .md)
-
 # --- Convert. This is where a bad body fails, before anything is sent. ---
 BODY=$(mktemp); trap 'rm -f "$BODY"' EXIT
 python3 "$SCRIPT_DIR/frontmatter.py" body "$FILE" \
     | python3 "$SCRIPT_DIR/md_to_htmlplus.py" > "$BODY"
 
+# --- Title: the first <h1> the conversion emitted, else the filename ---
+# Not `grep -m1 '^# ' "$FILE"` over the raw file - the brief's version,
+# kept until review found it. That pattern also matches a YAML comment
+# inside the frontmatter block ("# a note to self") and a shell comment
+# inside a fenced code block ("# install the thing first"), both ordinary
+# shapes in a real document, and both become the page --title on every
+# subsequent update - silently renaming a live page to the wrong thing.
+# md_to_htmlplus.py has already stripped the frontmatter (it reads
+# frontmatter.py's `body`, not the raw file) and tracked fences correctly
+# by the time BODY exists, so the <h1> it actually emitted is read back
+# out here instead, rather than re-deriving the same wrong answer a second
+# way. Tags inside the heading (**bold** becomes <strong>, and similarly
+# for the other inline marks) are stripped and entities unescaped, so the
+# title is plain text, not a fragment of HTML+.
+TITLE=$(python3 -c '
+import html, re, sys
+body = open(sys.argv[1], encoding="utf-8").read()
+match = re.search(r"<h1>(.*?)</h1>", body, re.S)
+if match:
+    text = re.sub(r"<[^>]+>", "", match.group(1))
+    print(html.unescape(text).strip())
+' "$BODY")
+[ -n "$TITLE" ] || TITLE=$(basename "$FILE" .md)
+
 # The source banner. A reader who cannot edit needs somewhere to put a
 # correction, so the warning names the route as well as the rule - a warning
 # without a route just tells people their feedback has nowhere to go.
+#
+# $FILE is escaped before it goes into this HTML+ text content - a path
+# containing < or > would otherwise corrupt the fragment rather than read
+# oddly. The to-adf proof just below still refuses a broken fragment and
+# sends nothing either way, so this was never a way to smuggle something
+# through - but a correct conversion is better than one that merely fails
+# safe.
+FILE_ESC=$(printf '%s' "$FILE" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
 BANNER=$(mktemp); trap 'rm -f "$BODY" "$BANNER"' EXIT
 {
     printf '<div data-type="panel-info"><p>'
-    printf 'Generated from <code>%s</code> in version control. ' "$FILE"
+    printf 'Generated from <code>%s</code> in version control. ' "$FILE_ESC"
     printf 'An edit made here is lost at the next publish - '
     printf 'leave a page comment instead and it is read back into the source.'
     printf '</p></div>'
@@ -200,6 +228,20 @@ else
     echo "$OUT"
     NEW_ID=$(printf '%s' "$OUT" | sed -n 's/^Created page \([0-9]*\):.*/\1/p')
     [ -n "$NEW_ID" ] || { echo "Error: could not read the new page id." >&2; exit 1; }
-    python3 "$SCRIPT_DIR/frontmatter.py" set-page-id "$FILE" "$NEW_ID"
+    # This is the one failure this script can detect that SKILL.md's own
+    # "commit that change, or the next run creates a second page" warning
+    # is about - a page now exists live, and if its id does not reach the
+    # file, nothing else will notice until that second page appears.
+    # Guarded like every other write path above, not left to a raw
+    # traceback (proven: a read-only directory makes frontmatter.py's
+    # set-page-id die with an uncaught PermissionError).
+    if ! WRITE_ERR=$(python3 "$SCRIPT_DIR/frontmatter.py" set-page-id "$FILE" "$NEW_ID" 2>&1); then
+        echo >&2
+        echo "Error: page $NEW_ID was created but its id could not be written to $FILE." >&2
+        echo "Cause: $(printf '%s' "$WRITE_ERR" | tail -n1)" >&2
+        echo "Fix: add    page_id: \"$NEW_ID\"    under confluence: in $FILE by hand before re-running," >&2
+        echo "     or the next run will create a second page." >&2
+        exit 1
+    fi
     echo "Wrote page_id $NEW_ID into $FILE - commit that change."
 fi

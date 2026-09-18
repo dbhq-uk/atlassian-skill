@@ -175,6 +175,61 @@ class TestNoDestructiveVerb(unittest.TestCase):
             self.assertNotIn("api DELETE", text, str(path))
 
 
+class TestPublishVersionParserTracksConfluencePagesWording(unittest.TestCase):
+    """publish.sh scrapes a plain-text line confluence-pages.sh prints, with
+    nothing else asserting the two agree - a coupling across two files that
+    a wording change on either side breaks silently, not loudly:
+    publish.sh's BASE_VERSION just comes back empty and a later, more
+    confusing error fires instead of this one. This runs the real sed
+    command lifted from publish.sh against a sample of the real header line
+    lifted from confluence-pages.sh, so a future edit to either file's
+    wording fails this test directly rather than being caught by hand.
+    """
+
+    PAGES_SH = (REPO / "skills" / "confluence" / "scripts"
+                / "confluence-pages.sh")
+    PUBLISH_SH = (REPO / "skills" / "confluence-publish" / "scripts"
+                  / "publish.sh")
+
+    def test_publish_sh_sed_extracts_confluence_pages_sh_header(self):
+        pages_text = self.PAGES_SH.read_text(encoding="utf-8")
+        publish_text = self.PUBLISH_SH.read_text(encoding="utf-8")
+
+        header = re.search(
+            r'echo "(# page id \$PAGE_ID, version \$VERSION[^"]*)"', pages_text
+        )
+        self.assertIsNotNone(
+            header,
+            "confluence-pages.sh no longer prints the header publish.sh "
+            "parses - update the sed below (or this pattern) to match.",
+        )
+        sample_line = (
+            header.group(1)
+            .replace("$PAGE_ID", "1234567")
+            .replace("$VERSION", "14")
+        )
+
+        sed_script = re.search(
+            r"sed -n '(s/\^# page id.*?/p)'", publish_text, re.S
+        )
+        self.assertIsNotNone(
+            sed_script,
+            "publish.sh no longer parses the version with this sed command "
+            "- update this test to match whatever replaced it.",
+        )
+
+        result = subprocess.run(
+            ["sed", "-n", sed_script.group(1)],
+            input=sample_line + "\n",
+            capture_output=True, text=True, check=True,
+        )
+        self.assertEqual(
+            result.stdout.strip(), "14",
+            "publish.sh's version sed no longer extracts the version number "
+            "from confluence-pages.sh's actual header line.",
+        )
+
+
 class TestNoEmDash(unittest.TestCase):
     def test_house_style_forbids_them_and_the_repo_obeys(self):
         for path in TEXT_FILES:
