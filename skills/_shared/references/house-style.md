@@ -195,12 +195,14 @@ reliable route is always fetch, splice, verify:
    copy destroys their work as surely as deleting it.
 2. **Splice your change into what came back**, preserving everything you are
    not deliberately changing: local IDs, `data-colwidth` values, inline
-   comment anchors (`data-annotation-id`), media IDs and collections.
+   comment anchors (Confluence's annotation mark, carried as
+   `adf-opaque-mark` - see `html-patterns.md`), media IDs and collections.
 3. **Verify by re-fetching** and reading the section you changed.
 
-Never invent an opaque ID (`data-id`, `data-collection`, `data-media-id`,
-`data-resource-id`, `data-annotation-id`). Copy them from the fetched content
-or from an upload step's output.
+Never invent an opaque ID (`data-id`, `data-collection`). Copy them from the
+fetched content or from an upload step's output - and never hand-write or
+edit an `adf-opaque`/`adf-opaque-mark` element's `data-adf` payload either;
+copy it through byte for byte.
 
 ### Where a page is generated from a repository
 

@@ -124,6 +124,30 @@ The first column is `<th>`, which renders it as a header column.
 
 ---
 
+## Opaque content
+
+A real page carries node types and marks this converter has no name for -
+the bodied extension above is one, and Atlassian adds more over time. Rather
+than refuse the whole page over a part it cannot render, these arrive as:
+
+```html
+<div data-type="adf-opaque" data-adf="BASE64_JSON"></div>
+<span data-type="adf-opaque-mark" data-adf="BASE64_JSON">…</span>
+```
+
+`div` in block position, `span` inline. `data-adf` is that node's or mark's
+own ADF, base64-encoded, and converts straight back to exactly what it was.
+**An inline comment anchor - Confluence's annotation mark - is the one you
+meet most often**: it has no named HTML+ form either, so it always arrives
+as `adf-opaque-mark`.
+
+**Never hand-write one, and never edit `data-adf`.** Copy the whole element
+through unchanged when splicing a change into a fetched page - it is
+round-trip bookkeeping, the same as a media id or a local id, not something
+to author.
+
+---
+
 ## Tables
 
 ```html
@@ -227,11 +251,12 @@ Available: `layout-two-equal`, `layout-two-left-sidebar`,
 ## Code blocks
 
 ```html
-<pre data-wrap="true"><code class="language-json">{ "transactionId": 1 }</code></pre>
+<pre><code class="language-json">{ "transactionId": 1 }</code></pre>
 ```
 
 Use the real language class so it highlights. `plaintext` for a bare route or a
-shell line.
+shell line. `<pre>` takes no other attribute - `data-wrap` is not a real one;
+this converter has no line-wrap toggle and silently drops it if written.
 
 ---
 
