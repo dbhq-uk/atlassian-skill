@@ -365,5 +365,81 @@ class TestPublishIdempotency(unittest.TestCase):
         self.assertIn("CREATE", result.stdout)
 
 
+class TestPublishRefusesAnEmptyBody(unittest.TestCase):
+    """publish.sh must never replace a page's content with the banner alone.
+
+    Both routes to an empty $BODY are covered: a file that converts to
+    nothing on its own merits, and a pipeline failure inside the
+    frontmatter.py | md_to_htmlplus.py step that `set -o pipefail` now turns
+    into a stopped script rather than a silently empty $BODY.
+    """
+
+    SCRIPT = (REPO / "skills" / "confluence-publish" / "scripts"
+              / "publish.sh")
+    FRONTMATTER_PY = (REPO / "skills" / "confluence-publish" / "scripts"
+                       / "frontmatter.py")
+    MD_TO_HTMLPLUS_PY = (REPO / "skills" / "confluence-publish" / "scripts"
+                          / "md_to_htmlplus.py")
+
+    def _write(self, content, mode="w", **kwargs):
+        import tempfile
+        f = tempfile.NamedTemporaryFile(mode, suffix=".md", delete=False, **kwargs)
+        f.write(content)
+        f.close()
+        return f.name
+
+    def test_a_file_that_is_only_frontmatter_is_refused_not_published(self):
+        path = self._write('---\nconfluence:\n  space: "1"\n---\n')
+        result = subprocess.run(
+            ["bash", str(self.SCRIPT), path, "--dry-run"],
+            capture_output=True, text=True,
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("Error:", result.stderr)
+        self.assertIn("empty", result.stderr)
+        # Never reaches the point of reporting a dry-run action - nothing
+        # about this file should look like a normal, previewable publish.
+        self.assertNotIn("CREATE", result.stdout)
+        self.assertNotIn("UPDATE", result.stdout)
+
+    def test_a_body_that_is_only_an_html_comment_is_also_refused(self):
+        # Non-empty bytes, but htmlplus.py's HTMLParser silently drops a
+        # comment, so this converts to {"content":[]} the same as a
+        # zero-byte body - proving the guard checks the converted ADF, not
+        # merely whether $BODY has any bytes in it.
+        path = self._write(
+            '---\nconfluence:\n  space: "1"\n---\n\n<!-- nothing but a comment -->\n'
+        )
+        result = subprocess.run(
+            ["bash", str(self.SCRIPT), path, "--dry-run"],
+            capture_output=True, text=True,
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("Error:", result.stderr)
+
+    def test_publish_sh_enables_pipefail(self):
+        text = self.SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("set -o pipefail", text)
+
+    def test_pipefail_catches_a_crashed_first_stage_of_the_conversion_pipe(self):
+        # Reproduces the underlying failure directly: a file frontmatter.py
+        # cannot decode makes it crash, and without pipefail the pipe's exit
+        # status is md_to_htmlplus.py's alone - which succeeds, on the empty
+        # input it received because the first stage never wrote anything.
+        # publish.sh now runs this exact shape of pipeline under
+        # `set -o pipefail`, so the pipe as a whole must fail.
+        bad = self._write(b"\xff\xfe not valid utf-8 in the body\n", mode="wb")
+        with_pipefail = subprocess.run(
+            ["bash", "-c",
+             f'set -e -o pipefail; '
+             f'python3 "{self.FRONTMATTER_PY}" body "{bad}" '
+             f'| python3 "{self.MD_TO_HTMLPLUS_PY}" > /dev/null'],
+        )
+        self.assertNotEqual(
+            with_pipefail.returncode, 0,
+            "set -o pipefail did not catch the crashed first stage of the pipe",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

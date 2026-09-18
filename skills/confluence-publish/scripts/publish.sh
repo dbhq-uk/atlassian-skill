@@ -50,6 +50,7 @@
 #   ever eval'd.
 
 set -e
+set -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SHARED="$SCRIPT_DIR/../../_shared/scripts"
@@ -97,9 +98,41 @@ PARENT="${FM_PARENT:-$PARENT_ARG}"
 PAGE_ID="$FM_PAGE_ID"
 
 # --- Convert. This is where a bad body fails, before anything is sent. ---
+# `set -o pipefail` above matters here specifically: without it, a crash in
+# frontmatter.py (a non-UTF-8 file, say) still leaves this pipeline's exit
+# status at 0, because only md_to_htmlplus.py's own status is seen - and
+# md_to_htmlplus.py, fed nothing because the first stage died, converts an
+# empty input to an empty BODY and exits cleanly. pipefail makes the
+# pipeline's exit status the first non-zero status in it, so that crash now
+# stops this script here, at set -e, instead of sailing through as a
+# successful empty conversion.
 BODY=$(mktemp); trap 'rm -f "$BODY"' EXIT
 python3 "$SCRIPT_DIR/frontmatter.py" body "$FILE" \
     | python3 "$SCRIPT_DIR/md_to_htmlplus.py" > "$BODY"
+
+# --- Refuse an empty body here, before the banner below ever gets built. ---
+# The banner is never empty by itself - it is a fixed info panel - so a
+# BANNER built by prepending it to an empty BODY is itself non-empty and
+# sails straight past both of confluence-pages.sh's guards: require_body_file
+# only checks the file is non-zero bytes, and to_adf_string's
+# `content|length == 0` check runs on the banner-plus-body ADF, which is
+# never empty once the banner is in it. Checked here, on BODY alone, before
+# either guard ever sees this write: a file that is only frontmatter, or one
+# truncated to something that converts to nothing (an HTML comment, stray
+# whitespace), must not silently become "the page now says only the source
+# banner" with an exit 0 and no warning.
+BODY_ADF=$(python3 "$SHARED/htmlplus.py" to-adf < "$BODY") || {
+    echo "Error: $FILE did not convert to a usable body." >&2
+    echo "Cause: the HTML+ conversion failed - see the error above. Nothing was sent." >&2
+    echo "Fix: correct $FILE and try again." >&2
+    exit 1
+}
+if [ "$(printf '%s' "$BODY_ADF" | jq -r '.content | length')" = "0" ]; then
+    echo "Error: $FILE converts to an empty body." >&2
+    echo "Cause: the file is only frontmatter, or its content converts to nothing to publish - htmlplus.py returned {\"content\":[]}." >&2
+    echo "Fix: add content to $FILE and try again. Nothing was sent - not even the source banner." >&2
+    exit 1
+fi
 
 # --- Title: the first <h1> the conversion emitted, else the filename ---
 # Not `grep -m1 '^# ' "$FILE"` over the raw file - the brief's version,
