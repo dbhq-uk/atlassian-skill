@@ -352,36 +352,46 @@ class TestCredentialMove(unittest.TestCase):
 
 
 class TestPublishIdempotency(unittest.TestCase):
-    """A second publish of an unchanged file must update, never create."""
+    """A second publish of an unchanged file must update, never create.
 
-    def test_publish_dry_run_reports_update_when_a_page_id_is_bound(self):
+    Both tests run with HOME pointed at a fresh empty directory, the same
+    isolation confluence-publish/tests/test_attachments.py uses. Without
+    it the bound-page_id case below is not a local test at all: publish.sh
+    previews the round-trip gate by calling `confluence-pages.sh read` for
+    real, which reads ~/.dbhq/atlassian/config.json and, on any machine
+    where the skill is actually set up, sends a credentialed HTTPS request
+    to that person's live Atlassian site. Proven with strace: one curl and
+    one connection to port 443 with a real config present, none with an
+    empty HOME. The assertions never depended on the response - publish.sh
+    prints "UPDATE page ..." and "Nothing was sent." either way - so the
+    call bought nothing and the suite passed identically without it.
+    """
+
+    def _run_dry_run(self, frontmatter_body):
         import subprocess
         import tempfile
         script = REPO / "skills" / "confluence-publish" / "scripts" / "publish.sh"
         with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as f:
-            f.write(
-                '---\nconfluence:\n  space: "1"\n  page_id: "8901234"\n---\n\n'
-                "# Title\n\nBody.\n"
-            )
+            f.write(frontmatter_body)
             path = f.name
-        result = subprocess.run(
+        return subprocess.run(
             ["bash", str(script), path, "--dry-run"],
             capture_output=True, text=True,
+            env={"HOME": tempfile.mkdtemp(), "PATH": os.environ.get("PATH", "")},
+        )
+
+    def test_publish_dry_run_reports_update_when_a_page_id_is_bound(self):
+        result = self._run_dry_run(
+            '---\nconfluence:\n  space: "1"\n  page_id: "8901234"\n---\n\n'
+            "# Title\n\nBody.\n"
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("UPDATE page 8901234", result.stdout)
         self.assertIn("Nothing was sent.", result.stdout)
 
     def test_publish_dry_run_reports_create_when_no_page_id_is_bound(self):
-        import subprocess
-        import tempfile
-        script = REPO / "skills" / "confluence-publish" / "scripts" / "publish.sh"
-        with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as f:
-            f.write('---\nconfluence:\n  space: "1"\n---\n\n# Title\n\nBody.\n')
-            path = f.name
-        result = subprocess.run(
-            ["bash", str(script), path, "--dry-run"],
-            capture_output=True, text=True,
+        result = self._run_dry_run(
+            '---\nconfluence:\n  space: "1"\n---\n\n# Title\n\nBody.\n'
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("CREATE", result.stdout)
@@ -610,14 +620,32 @@ class TestTokenTempFileCleanupOnSignal(unittest.TestCase):
     then checks it is gone.
     """
 
-    def _wait_for_new_file(self, directory, before, timeout=5):
+    def _wait_for_written_config(self, directory, before, timeout=20):
+        """The new temp file, once it actually holds the token.
+
+        Waiting for the file to merely *exist* is a race, and it is the
+        race that made these two tests flake: every one of the three
+        scripts does `cfg=$(mktemp)`, then `chmod 600`, then installs the
+        trap, and only then writes the `user = "email:TOKEN"` line. A
+        signal landing in the gap between mktemp and trap kills bash at
+        its default disposition and leaves the file behind - correctly,
+        and harmlessly, because at that instant the file is still empty.
+        The property under test is "a file NAMING THE TOKEN must not
+        survive a signal", so wait until the file is non-empty: by then
+        the token is in it and the trap is necessarily installed, which
+        is exactly the window the trap is there to cover.
+        """
         import time
         deadline = time.time() + timeout
         while time.time() < deadline:
-            found = set(os.listdir(directory)) - before
-            if found:
-                return directory / next(iter(found))
-            time.sleep(0.05)
+            for name in set(os.listdir(directory)) - before:
+                path = directory / name
+                try:
+                    if path.stat().st_size > 0:
+                        return path
+                except OSError:
+                    pass
+            time.sleep(0.02)
         return None
 
     def _assert_cleans_up_on_term(self, argv, env):
@@ -647,13 +675,43 @@ class TestTokenTempFileCleanupOnSignal(unittest.TestCase):
                 start_new_session=True,
             )
             try:
-                cfg = self._wait_for_new_file(tmp, before)
-                self.assertIsNotNone(cfg, "the curl config file never appeared")
-                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-                proc.wait(timeout=15)
-                deadline = time.time() + 5
+                cfg = self._wait_for_written_config(tmp, before)
+                self.assertIsNotNone(
+                    cfg, "the curl config file never appeared with content in it"
+                )
+                self.assertIn(
+                    "secret", cfg.read_text(),
+                    "the file this test signals over does not name the token - "
+                    "it is not the file the trap exists to remove",
+                )
+                # Signal until the file goes, not once - and wait on the
+                # FILE, never on the process. Both details are what an
+                # earlier version of this test got wrong, and each caused
+                # its own flake:
+                #
+                # - Signalling once races the fork. The script writes the
+                #   config file and only then starts curl, so a group-wide
+                #   signal aimed the instant the file appears can land
+                #   before curl is forked - and a process forked after the
+                #   signal never receives it. Confirmed by listing the
+                #   group afterwards: bash, curl and sleep all still there,
+                #   none of them signalled. bash defers a trapped signal
+                #   until the running foreground command returns, so the
+                #   pending TERM then waits out curl's full sleep. Pressing
+                #   Ctrl-C again is exactly what a real user does when the
+                #   first one appears to do nothing.
+                # - Requiring the process to EXIT asserts something bash
+                #   does not do: it runs a trapped signal's handler and
+                #   carries on. The file being gone is the property; the
+                #   process is killed in the finally block either way.
+                pgid = os.getpgid(proc.pid)
+                deadline = time.time() + 15
                 while cfg.exists() and time.time() < deadline:
-                    time.sleep(0.05)
+                    try:
+                        os.killpg(pgid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        break
+                    time.sleep(0.1)
                 self.assertFalse(
                     cfg.exists(),
                     f"{cfg} still exists after SIGTERM - the trap did not "
