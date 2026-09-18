@@ -19,6 +19,27 @@ content model is block children only), so `<li>one</li>` is rejected and
 exception on the list side: taskItem takes inline content directly, the same
 as a paragraph or a heading, so its text is left bare.
 
+Indented list markers (a bullet, numbered item or task under another item)
+are refused with a ConversionError rather than converted, and rather than
+silently absorbed into whatever paragraph or list happens to be open when
+they are seen. This converter does not support nested lists - review found
+that, unsupported, an indented "  - nested" line matches none of BULLET,
+ORDERED or TASK (all anchored at column 0), so it fell through into the
+paragraph catch-all: its marker survived as literal text, its indentation
+collapsed to whatever join the paragraph loop used, and the list around it
+split into two separate <ul> blocks with no error at all. That is silent
+corruption of exactly the kind this whole converter exists to avoid -
+htmlplus.py raises ConversionError by name rather than drop or mangle
+anything it cannot represent, and a markdown source deserves the same
+treatment rather than a lesser one just because the input is friendlier.
+Refusing was chosen over implementing one level of nesting because a clear,
+early error that names the line is a better outcome for a publishing tool
+than a converter that silently supports depth 1 and silently mangles depth
+2 - and because ADF's own nesting (a listItem's block content includes
+another bulletList/orderedList) is already reachable for anyone who needs
+it, by writing that nesting directly in raw HTML+, the same way a panel or
+a layout is.
+
 Standard library only.
 """
 
@@ -40,6 +61,21 @@ ORDERED = re.compile(r"^\d+\.\s+(.*)$")
 HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
 FENCE = re.compile(r"^```(\w*)\s*$")
 TABLE_SEP = re.compile(r"^\|[\s:|-]+\|$")
+# A bullet, numbered or task marker preceded by at least one space or tab -
+# i.e. any of BULLET/ORDERED/TASK's own marker shapes, but indented rather
+# than at column 0. Deliberately not "any indented line": ordinary indented
+# prose (a continuation line, a quoted snippet) is not a list marker and is
+# not this converter's business to refuse.
+INDENTED_LIST = re.compile(r"^[ \t]+(?:[-*]\s+|\d+\.\s+)")
+
+
+class ConversionError(Exception):
+    """Raised when the markdown source cannot be safely converted.
+
+    Named and used the same way as htmlplus.py's ConversionError: a message
+    that names the specific line or construct that could not be handled,
+    raised in preference to converting it wrong or dropping it silently.
+    """
 
 
 def _inline(text):
@@ -79,6 +115,19 @@ def md_to_htmlplus(markdown):
         if not line.strip():
             i += 1
             continue
+
+        if INDENTED_LIST.match(line):
+            # Checked before anything else so it fires whether the line is
+            # met fresh (the first line of what would otherwise become a
+            # paragraph) or was about to be swallowed as a paragraph
+            # continuation - the stopping condition added to that loop
+            # below hands control back here rather than consuming it there.
+            raise ConversionError(
+                f"Line {i + 1} is an indented list item: {line.strip()!r}. "
+                f"Nested lists are not supported - flatten it to a "
+                f"top-level item, or write the nesting directly in HTML+ "
+                f'instead (<ul><li><p>...</p><ul>...</ul></li></ul>).'
+            )
 
         fence = FENCE.match(line)
         if fence:
@@ -150,6 +199,7 @@ def md_to_htmlplus(markdown):
                     and not FENCE.match(lines[i]) \
                     and not BULLET.match(lines[i]) \
                     and not ORDERED.match(lines[i]) \
+                    and not INDENTED_LIST.match(lines[i]) \
                     and not lines[i].startswith("|"):
                 para.append(lines[i])
                 i += 1

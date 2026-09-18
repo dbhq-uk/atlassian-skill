@@ -1,13 +1,17 @@
+import os
 import pathlib
+import stat
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 SCRIPTS = pathlib.Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
+import frontmatter  # noqa: E402  (module import, needed to patch frontmatter.os.replace)
 from frontmatter import read_binding, strip_frontmatter, write_page_id  # noqa: E402
-from md_to_htmlplus import md_to_htmlplus  # noqa: E402
+from md_to_htmlplus import ConversionError, md_to_htmlplus  # noqa: E402
 
 BOUND = """\
 ---
@@ -225,6 +229,71 @@ class TestFrontmatterEdgeCases(unittest.TestCase):
         write_page_id(path, "5555555")
         self.assertEqual(path.read_text(), after_first)
 
+    def test_write_page_id_on_a_bom_file_finds_and_preserves_the_real_binding(self):
+        # Before the fix: a leading UTF-8 BOM sat on line 0 ahead of "---",
+        # so _split's line-0 check never matched, the file read as having no
+        # frontmatter at all, and write_page_id's no-frontmatter branch
+        # prepended a brand new confluence: block ahead of the real one -
+        # permanently demoting the original space/parent into what the
+        # module now treats as body text. This proves the real binding is
+        # found (not just "some binding"), and that only one frontmatter
+        # block exists after the write, not two competing ones.
+        path = self._write(UNBOUND)
+        path.write_bytes(b"\xef\xbb\xbf" + path.read_bytes())
+
+        self.assertEqual(read_binding(path)["space"], "98765")
+        self.assertEqual(read_binding(path)["parent"], "1234567")
+
+        write_page_id(path, "5555555")
+
+        after = path.read_bytes()
+        self.assertTrue(after.startswith(b"\xef\xbb\xbf"), "BOM was dropped")
+        self.assertEqual(
+            after.count(b"---"), 2,
+            "expected exactly one frontmatter block (2 delimiter lines), "
+            "not a second one prepended ahead of the real one",
+        )
+        self.assertEqual(read_binding(path)["page_id"], "5555555")
+        self.assertEqual(read_binding(path)["space"], "98765")
+        self.assertEqual(read_binding(path)["parent"], "1234567")
+
+    def test_write_page_id_on_a_bom_file_with_no_frontmatter_keeps_the_bom_first(self):
+        path = self._write("Just a body.\n")
+        path.write_bytes(b"\xef\xbb\xbf" + path.read_bytes())
+        write_page_id(path, "8901234")
+        after = path.read_bytes()
+        self.assertTrue(after.startswith(b"\xef\xbb\xbf"))
+        self.assertEqual(read_binding(path)["page_id"], "8901234")
+
+    def test_write_page_id_leaves_the_file_intact_if_the_write_is_interrupted(self):
+        # Simulates a crash between "temp file written" and "moved into
+        # place": os.replace is the exact call that makes the swap atomic,
+        # so making it raise is the sharpest way to prove a failure there
+        # cannot leave the real file truncated or half-written - the plain
+        # open(path, "w") + write() this replaced could not make that
+        # promise at all.
+        path = self._write(UNBOUND)
+        before = path.read_bytes()
+
+        with mock.patch.object(
+            frontmatter.os, "replace", side_effect=OSError("simulated crash")
+        ):
+            with self.assertRaises(OSError):
+                write_page_id(path, "5555555")
+
+        self.assertEqual(path.read_bytes(), before, "the real file was touched")
+        leftovers = [
+            p for p in path.parent.iterdir()
+            if p.name.startswith(f".{path.name}.") and p.name.endswith(".tmp")
+        ]
+        self.assertEqual(leftovers, [], "a temp file was left behind uncleaned")
+
+    def test_write_page_id_preserves_the_file_mode(self):
+        path = self._write(UNBOUND)
+        os.chmod(path, 0o640)
+        write_page_id(path, "5555555")
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o640)
+
 
 class TestMarkdownToHtmlPlus(unittest.TestCase):
     def test_headings_and_paragraphs(self):
@@ -289,6 +358,46 @@ class TestMarkdownToHtmlPlus(unittest.TestCase):
         self.assertEqual(
             [n["type"] for n in doc["content"]],
             ["heading", "paragraph", "panel", "taskList", "codeBlock"],
+        )
+
+    def test_indented_bullet_under_a_list_is_refused_not_mangled(self):
+        # Exactly the review's repro: unhandled, this fell through into the
+        # paragraph catch-all - the marker survived as literal text, the
+        # indentation collapsed, and the outer list split into two <ul>
+        # blocks either side of the wreckage, with no error at all. The fix
+        # is a refusal, not a silent conversion, so this only asserts the
+        # error - there is no "correct HTML+" for this input to compare to.
+        src = "- one\n  - nested one\n  - nested two\n- two\n"
+        with self.assertRaises(ConversionError) as ctx:
+            md_to_htmlplus(src)
+        self.assertIn("nested one", str(ctx.exception))
+
+    def test_indented_bullet_after_a_paragraph_is_also_refused(self):
+        # A different code path from the case above: here the indented line
+        # would have been swallowed by the paragraph-continuation loop
+        # rather than met fresh at the top of the line dispatch, since no
+        # list was open beforehand. Both paths must refuse.
+        src = "Some intro text.\n  - nested bullet\n"
+        with self.assertRaises(ConversionError):
+            md_to_htmlplus(src)
+
+    def test_indented_numbered_item_is_refused(self):
+        src = "1. one\n   2. nested\n"
+        with self.assertRaises(ConversionError):
+            md_to_htmlplus(src)
+
+    def test_indented_task_item_is_refused(self):
+        src = "- [ ] one\n  - [ ] nested\n"
+        with self.assertRaises(ConversionError):
+            md_to_htmlplus(src)
+
+    def test_ordinary_indented_prose_is_not_mistaken_for_a_list(self):
+        # A continuation line that happens to start with whitespace but is
+        # not a list marker (no "-", "*" or "N." after the indent) is
+        # ordinary prose, not this converter's business to refuse.
+        out = md_to_htmlplus("Some intro text.\n  still the same paragraph.\n")
+        self.assertEqual(
+            out, "<p>Some intro text.   still the same paragraph.</p>"
         )
 
 
