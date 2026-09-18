@@ -12,6 +12,7 @@ from htmlplus import ConversionError, html_to_adf  # noqa: E402
 from htmlplus import adf_to_html, adf_to_markdown  # noqa: E402
 from htmlplus import _opaque_to_html, _opaque_mark_to_html  # noqa: E402
 from htmlplus import check_roundtrip, _first_roundtrip_difference  # noqa: E402
+from htmlplus import html_to_adf_for_jira  # noqa: E402
 
 
 class TestDocumentEnvelope(unittest.TestCase):
@@ -1280,6 +1281,114 @@ class TestRoundtripGate(unittest.TestCase):
         ok, differing_type = check_roundtrip(doc)
         self.assertTrue(ok)
         self.assertIsNone(differing_type)
+
+
+class TestJiraProfile(unittest.TestCase):
+    """Jira's ADF profile is narrower than Confluence's.
+
+    A status lozenge and a decision list are Confluence nodes. Jira renders
+    neither, and a description containing one is accepted and then displays as
+    nothing at all - the worst kind of failure, because it looks like it
+    worked.
+    """
+
+    def test_paragraphs_panels_and_code_pass(self):
+        doc = html_to_adf_for_jira(
+            "<p>Steps.</p>"
+            '<div data-type="panel-warning"><p>Careful.</p></div>'
+            '<pre><code class="language-bash">ls</code></pre>'
+        )
+        types = [n["type"] for n in doc["content"]]
+        self.assertEqual(types, ["paragraph", "panel", "codeBlock"])
+
+    def test_task_lists_and_tables_pass(self):
+        doc = html_to_adf_for_jira(
+            '<ul data-type="task-list">'
+            '<li data-type="task-item"><input type="checkbox"> A</li></ul>'
+            '<table data-width="400"><tbody><tr>'
+            '<td data-colwidth="400"><p>x</p></td></tr></tbody></table>'
+        )
+        self.assertEqual(
+            [n["type"] for n in doc["content"]], ["taskList", "table"]
+        )
+
+    def test_a_status_lozenge_is_refused(self):
+        with self.assertRaises(ConversionError) as cm:
+            html_to_adf_for_jira(
+                '<p><span data-type="status" data-color="green">Built</span></p>'
+            )
+        self.assertIn("status", str(cm.exception))
+        self.assertIn("Jira", str(cm.exception))
+
+    def test_a_decision_list_is_refused(self):
+        with self.assertRaises(ConversionError) as cm:
+            html_to_adf_for_jira(
+                '<ul data-type="decision-list">'
+                '<li data-type="decision-item" data-state="DECIDED">x</li></ul>'
+            )
+        self.assertIn("decisionList", str(cm.exception))
+
+    def test_a_layout_section_is_refused(self):
+        with self.assertRaises(ConversionError) as cm:
+            html_to_adf_for_jira(
+                '<section data-type="layout-two-equal">'
+                '<div data-type="column"><p>L</p></div>'
+                '<div data-type="column"><p>R</p></div></section>'
+            )
+        self.assertIn("layoutSection", str(cm.exception))
+
+    def test_a_status_hidden_in_an_opaque_wrapper_is_still_refused(self):
+        # The brief this task came from did not know opaque passthrough
+        # (Task 11b) existed yet: it checks CONFLUENCE_ONLY membership on
+        # the parsed tree html_to_adf returns, not on the HTML+ source. That
+        # is only safe if a Confluence-only node smuggled in through the
+        # generic <span data-type="adf-opaque"> wrapper comes back out with
+        # its real type restored rather than staying "adf-opaque" - proved
+        # here rather than assumed. _opaque_to_html builds exactly the wire
+        # form _node_to_html/_inline_to_html would have produced for this
+        # node had it come from a live page with no named support for it.
+        opaque_span = _opaque_to_html(
+            {"type": "status", "attrs": {"text": "Built", "color": "green"}},
+            tag="span",
+        )
+        with self.assertRaises(ConversionError) as cm:
+            html_to_adf_for_jira(f"<p>{opaque_span}</p>")
+        self.assertIn("status", str(cm.exception))
+        self.assertIn("Jira", str(cm.exception))
+
+    def test_bodied_extension_is_refused_even_though_it_only_ever_arrives_opaque(self):
+        # Unlike status/decisionList/decisionItem/expand/layoutSection/
+        # layoutColumn, this converter has no native HTML+ syntax for
+        # bodiedExtension at all - so this is the one CONFLUENCE_ONLY member
+        # that can only ever reach html_to_adf_for_jira through the opaque
+        # wrapper, and the case that actually exercises the passthrough
+        # path for real rather than merely by construction.
+        opaque_div = _opaque_to_html({
+            "type": "bodiedExtension",
+            "attrs": {"extensionType": "com.atlassian.confluence.macro.core",
+                      "extensionKey": "com.example.macro"},
+            "content": [{"type": "paragraph",
+                        "content": [{"type": "text", "text": "x"}]}],
+        })
+        with self.assertRaises(ConversionError) as cm:
+            html_to_adf_for_jira(opaque_div)
+        self.assertIn("bodiedExtension", str(cm.exception))
+        self.assertIn("Jira", str(cm.exception))
+
+    def test_an_opaque_type_jira_can_render_still_passes(self):
+        # The refusal is scoped to CONFLUENCE_ONLY, not to opaque
+        # passthrough in general - an unrecognised node this converter has
+        # no named support for, but that is not in CONFLUENCE_ONLY, still
+        # converts. Whether Jira itself renders an "extension" node is a
+        # question this task does not answer; the point here is narrower:
+        # html_to_adf_for_jira does not refuse it just for being opaque.
+        opaque_div = _opaque_to_html({
+            "type": "extension",
+            "attrs": {"extensionType": "com.atlassian.confluence.macro.core",
+                      "extensionKey": "com.example.macro", "parameters": {}},
+        })
+        doc = html_to_adf_for_jira(opaque_div)
+        self.assertEqual(doc["content"][0]["type"], "extension")
 
 
 if __name__ == "__main__":

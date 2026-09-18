@@ -66,6 +66,34 @@ Only `summary` is required; `type` defaults to `Task`. Blank lines in a descript
 
 Every successful create prints the issue key and its browse URL.
 
+## Formatted descriptions
+
+`--description-file` takes an HTML+ fragment in place of the plain-text `[description]`, so a description can carry a real panel, a syntax-highlighted code block and real checkboxes instead of a wall of text:
+
+```bash
+${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh create PAY-12 Task "Confirm the egress address" \
+    --description-file /tmp/desc.html
+```
+
+`[description]` and `--description-file` are mutually exclusive - pass one or the other, never both. `bulk` has no `--description-file` equivalent; every description in a bulk file is plain text.
+
+**Read these two files first. Every time.** They are the difference between a description that uses the platform and one that is a wall of bold text:
+
+1. `${CLAUDE_SKILL_DIR}/../_shared/references/house-style.md` - the conventions
+2. `${CLAUDE_SKILL_DIR}/../_shared/references/html-patterns.md` - the HTML+ patterns
+
+And if it exists, read `~/.dbhq/atlassian/house-style.md` too. That is the user's own tone and conventions, and it wins over anything in the shipped reference.
+
+Work through `${CLAUDE_SKILL_DIR}/../_shared/references/checklist.md` against the body before you send it. Both reference files are written primarily for a Confluence page - skip the sections with no Jira equivalent (page titles, cross-page smart links, the page-properties macro) and read the rest as it applies to an issue description.
+
+**Jira's ADF profile is narrower than Confluence's, and `--description-file` refuses what does not fit it.** A status lozenge, a decision list, an expand and a multi-column layout are Confluence-only components. The Jira API accepts a description containing one and then renders nothing where it should be - the worst kind of failure, because it looks like it worked. `--description-file` refuses these before anything is sent, naming the node:
+
+```
+Error: A status is a Confluence node and Jira does not render it. The API would accept the description and show nothing. Use a panel, a table, a code block or a task list instead.
+```
+
+Panels, code blocks with language highlighting, task lists, tables and headings all render correctly in a Jira issue - reach for those instead of the refused component.
+
 ## Writing the issue text
 
 Every summary and every description is written in **Simplified Technical English**. The rules, the word choices and the pre-create checklist are in [references/ste.md](references/ste.md). Read that file before you write an issue.

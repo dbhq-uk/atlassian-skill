@@ -1144,6 +1144,69 @@ def adf_to_markdown(doc):
     )
 
 
+# --- the Jira profile ---
+
+# Node types Confluence renders and Jira does not. A description carrying one
+# is accepted by the API and then shows as nothing on the issue, which looks
+# like it worked. Refused here instead.
+#
+# This check (in html_to_adf_for_jira, below) runs against the tree
+# html_to_adf already returned, not against the HTML+ source text - and that
+# is what makes it safe against opaque passthrough (Task 11b) with no extra
+# handling. An opaque HTML+ element's data-adf is decoded by _decode_adf
+# before the node is ever appended to the tree (see the ADF_OPAQUE branch in
+# _Builder.handle_starttag), so a status lozenge or a decision list smuggled
+# in through <div data-type="adf-opaque" data-adf="..."> comes back out with
+# its genuine "type" restored - "status", "decisionList" - exactly as if it
+# had been written with the native <span data-type="status"> syntax. Walking
+# the parsed tree therefore catches both forms with the same check; there is
+# nothing for this function to do about ADF_OPAQUE or ADF_OPAQUE_MARK by
+# name. Proven, not just argued, by TestJiraProfile below.
+#
+# bodiedExtension belongs in this set for a sharper reason than the other
+# six: this converter has no named HTML+ syntax for it at all (unlike
+# status/decisionList/decisionItem/expand/layoutSection/layoutColumn, which
+# are also Confluence-only but do have one), so the only way a bodiedExtension
+# node can ever reach this function is through the opaque wrapper. It is the
+# case that actually exercises the passthrough path rather than merely
+# being consistent with it.
+CONFLUENCE_ONLY = {"status", "decisionList", "decisionItem", "expand",
+                   "layoutSection", "layoutColumn", "bodiedExtension"}
+
+
+def _walk(node):
+    """Yield node, then every node reachable through its "content" list.
+
+    Walks the parsed ADF tree, which is what makes the opaque-passthrough
+    case safe - see the CONFLUENCE_ONLY comment above.
+    """
+    yield node
+    for child in node.get("content", []):
+        yield from _walk(child)
+
+
+def html_to_adf_for_jira(fragment):
+    """Convert HTML+ to ADF for a Jira issue field, refusing Confluence nodes.
+
+    Jira's ADF profile is narrower than Confluence's own. A status lozenge
+    and a decision list are Confluence nodes; Jira renders neither, and a
+    description containing one is accepted by the API and then displays as
+    nothing at all - the worst kind of failure, because it looks like it
+    worked. This is the same html_to_adf everything else in this file uses,
+    with that one further check on the result.
+    """
+    doc = html_to_adf(fragment)
+    for node in _walk(doc):
+        t = node.get("type")
+        if t in CONFLUENCE_ONLY:
+            raise ConversionError(
+                f"A {t} is a Confluence node and Jira does not render it. "
+                f"The API would accept the description and show nothing. "
+                f"Use a panel, a table, a code block or a task list instead."
+            )
+    return doc
+
+
 # --- the write-path round-trip gate ---
 
 def _first_roundtrip_difference(original, roundtripped):
@@ -1238,12 +1301,15 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "command",
-        choices=["to-adf", "to-html", "to-markdown", "check-roundtrip"],
+        choices=["to-adf", "to-adf-jira", "to-html", "to-markdown", "check-roundtrip"],
     )
     args = parser.parse_args(argv)
     try:
         if args.command == "to-adf":
             doc = html_to_adf(sys.stdin.read())
+            json.dump(doc, sys.stdout, separators=(",", ":"))
+        elif args.command == "to-adf-jira":
+            doc = html_to_adf_for_jira(sys.stdin.read())
             json.dump(doc, sys.stdout, separators=(",", ":"))
         elif args.command == "to-html":
             sys.stdout.write(adf_to_html(json.load(sys.stdin)))

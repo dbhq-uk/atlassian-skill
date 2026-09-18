@@ -15,7 +15,7 @@ Jira issues (create and read only)
 Usage: jira-issues.sh <command> [args]
 
 Create:
-  create <PROJECT> <TYPE> <summary> [description] [--label L]... [--priority P] [--parent KEY] [--dry-run]
+  create <PROJECT> <TYPE> <summary> [description] [--label L]... [--priority P] [--parent KEY] [--description-file FILE] [--dry-run]
   bulk <PROJECT> <file.json> [--dry-run]
         file.json is an array: [{"summary": "...", "type": "Task",
                                  "description": "...", "labels": ["a"],
@@ -29,20 +29,29 @@ Read:
 
 Every create prints the issue key and its browse URL. --dry-run prints the
 payload and sends nothing.
+
+--description-file takes an HTML+ fragment and formats it through the same
+converter Confluence pages use - a real panel, a syntax-highlighted code
+block, real checkboxes, instead of a wall of plain text. --description-file
+refuses a Confluence-only component (a status lozenge, a decision list, an
+expand, a layout) that Jira would accept and then render as nothing. It is
+mutually exclusive with the plain-text [description]; pass one or the other.
 EOF
 }
 
-# build_payload <project> <type> <summary> <description> <labels-json> <priority> <parent>
+# build_payload <project> <type> <summary> <desc-adf-json> <labels-json> <priority> <parent>
+# desc-adf-json is a complete ADF document already built by the caller (via
+# text_to_adf or htmlplus_jira), or the literal string "null" - never plain
+# text. Kept out of this function so it has no opinion on which converter a
+# caller used to get there.
 build_payload() {
-    local project="$1" type="$2" summary="$3" description="$4" labels="$5" priority="$6" parent="$7"
-    local desc_adf="null"
-    [ -n "$description" ] && desc_adf=$(text_to_adf "$description")
+    local project="$1" type="$2" summary="$3" desc_adf="$4" labels="$5" priority="$6" parent="$7"
 
     jq -n \
         --arg project "$project" \
         --arg type "$type" \
         --arg summary "$summary" \
-        --argjson description "$desc_adf" \
+        --argjson description "${desc_adf:-null}" \
         --argjson labels "${labels:-[]}" \
         --arg priority "$priority" \
         --arg parent "$parent" '
@@ -80,21 +89,34 @@ case "${1:-}" in
             echo "Usage: jira-issues.sh create <PROJECT> <TYPE> <summary> [description] [options]" >&2
             exit 1
         fi
-        DESCRIPTION=""; LABELS="[]"; PRIORITY=""; PARENT=""; DRY=0
+        DESCRIPTION=""; DESCRIPTION_FILE=""; LABELS="[]"; PRIORITY=""; PARENT=""; DRY=0
         # An unflagged first remaining argument is the description
         if [ $# -gt 0 ] && [ "${1#--}" = "$1" ]; then
             DESCRIPTION="$1"; shift
         fi
         while [ $# -gt 0 ]; do
             case "$1" in
-                --label)    LABELS=$(printf '%s' "$LABELS" | jq --arg l "$2" '. + [$l]'); shift 2 ;;
-                --priority) PRIORITY="$2"; shift 2 ;;
-                --parent)   PARENT="$2"; shift 2 ;;
-                --dry-run)  DRY=1; shift ;;
+                --label)             LABELS=$(printf '%s' "$LABELS" | jq --arg l "$2" '. + [$l]'); shift 2 ;;
+                --priority)          PRIORITY="$2"; shift 2 ;;
+                --parent)            PARENT="$2"; shift 2 ;;
+                --description-file)  DESCRIPTION_FILE="$2"; shift 2 ;;
+                --dry-run)           DRY=1; shift ;;
                 *) echo "Error: unknown option '$1'." >&2; exit 1 ;;
             esac
         done
-        create_issue "$(build_payload "$PROJECT" "$TYPE" "$SUMMARY" "$DESCRIPTION" "$LABELS" "$PRIORITY" "$PARENT")" "$DRY"
+        if [ -n "$DESCRIPTION" ] && [ -n "$DESCRIPTION_FILE" ]; then
+            echo "Error: --description and --description-file are mutually exclusive." >&2
+            echo "Fix: pass plain text as the positional description, or an HTML+ fragment with --description-file, not both." >&2
+            exit 1
+        fi
+        DESC_ADF="null"
+        if [ -n "$DESCRIPTION_FILE" ]; then
+            [ -f "$DESCRIPTION_FILE" ] || { echo "Error: $DESCRIPTION_FILE does not exist." >&2; exit 1; }
+            DESC_ADF=$(htmlplus_jira "$DESCRIPTION_FILE")
+        elif [ -n "$DESCRIPTION" ]; then
+            DESC_ADF=$(text_to_adf "$DESCRIPTION")
+        fi
+        create_issue "$(build_payload "$PROJECT" "$TYPE" "$SUMMARY" "$DESC_ADF" "$LABELS" "$PRIORITY" "$PARENT")" "$DRY"
         ;;
 
     bulk)
@@ -126,13 +148,17 @@ case "${1:-}" in
             LABELS=$(jq -c --argjson i "$i" '.[$i].labels // []' "$FILE")
             PRIORITY=$(jq -r --argjson i "$i" '.[$i].priority // ""' "$FILE")
             PARENT=$(jq -r --argjson i "$i" '.[$i].parent // ""' "$FILE")
+            # bulk takes plain-text description only - no --description-file
+            # equivalent field, so this always goes through text_to_adf.
+            DESC_ADF="null"
+            [ -n "$DESCRIPTION" ] && DESC_ADF=$(text_to_adf "$DESCRIPTION")
 
             if [ "$DRY" = "1" ]; then
                 printf '[%d/%d] %s\n' "$((i + 1))" "$COUNT" "$SUMMARY"
             else
                 printf '[%d/%d] %s ... ' "$((i + 1))" "$COUNT" "$SUMMARY"
             fi
-            if RESULT=$(create_issue "$(build_payload "$PROJECT" "$TYPE" "$SUMMARY" "$DESCRIPTION" "$LABELS" "$PRIORITY" "$PARENT")" "$DRY" 2>&1); then
+            if RESULT=$(create_issue "$(build_payload "$PROJECT" "$TYPE" "$SUMMARY" "$DESC_ADF" "$LABELS" "$PRIORITY" "$PARENT")" "$DRY" 2>&1); then
                 echo "$RESULT"
                 CREATED=$((CREATED + 1))
             else

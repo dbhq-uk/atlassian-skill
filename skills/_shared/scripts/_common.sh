@@ -172,3 +172,15 @@ text_to_adf() {
            content: [$paras[] | {type: "paragraph",
                                  content: [{type: "text", text: .}]}]}'
 }
+
+# htmlplus_jira <html-file> - convert an HTML+ fragment to ADF for a Jira field.
+# Refuses the Confluence-only nodes Jira does not render. Emits the ADF
+# document as JSON on stdout; exits 1 with the converter's message on stderr.
+#
+# Named for the script rather than the operation so it cannot be confused with
+# the Python html_to_adf(), which is a different function with a wider profile.
+htmlplus_jira() {
+    local script
+    script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/htmlplus.py"
+    python3 "$script" to-adf-jira < "$1"
+}
