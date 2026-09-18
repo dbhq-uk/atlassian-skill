@@ -639,8 +639,8 @@ class TestNesting(unittest.TestCase):
             "layoutSection", "blockquote",
         )
 
-    # -- Finding 3 (review, Task 7): a block/embed card nested inside a
-    # paragraph had no FORBIDDEN_CHILDREN rule, so html_to_adf accepted it,
+    # -- Finding 3: a block/embed card nested inside a paragraph had no
+    # FORBIDDEN_CHILDREN rule, so html_to_adf accepted it,
     # and adf_to_html's inline renderer had no branch for it either - the
     # card silently vanished on the way back to HTML+. Fixed on the forward
     # side: refuse the malformed input at authoring time rather than try to
@@ -682,12 +682,12 @@ ROUND_TRIP_CASES = [
     # reversed on every pass.
     "<p><strong><em>both</em></strong></p>",
     '<p><a href="https://example.com/x"><strong>link</strong></a></p>',
-    # Finding 4 (review, Task 7): html_to_adf had no <br> branch at all, so
+    # Finding 4: html_to_adf had no <br> branch at all, so
     # a page containing a hard break (shift-enter in the Confluence editor)
     # could not be converted back to ADF after a round trip through
     # adf_to_html, which does emit <br> for a hardBreak node.
     "<p>line one<br>line two</p>",
-    # Finding 5 (review, Task 7): the old blanket "if not data.strip():
+    # Finding 5: the old blanket "if not data.strip():
     # return" at the top of handle_data ate the space between two marked
     # runs, not just inter-tag formatting whitespace.
     "<p><strong>a</strong> <em>b</em></p>",
@@ -709,7 +709,7 @@ class TestRoundTrip(unittest.TestCase):
                 self.assertEqual(once, twice)
 
     def test_two_marks_keep_their_source_nesting_order(self):
-        # Finding 2 (review, Task 7): the emitter applied marks[0]
+        # Finding 2: the emitter applied marks[0]
         # innermost, the opposite of how html_to_adf stores them (outer to
         # inner, in tag-open order), so bold-inside-em became em-inside-bold
         # on every pass. Asserting the exact string, not just round-trip
@@ -719,7 +719,7 @@ class TestRoundTrip(unittest.TestCase):
         self.assertEqual(adf_to_html(doc), "<p><strong><em>both</em></strong></p>")
 
     def test_hard_break_converts_to_adf(self):
-        # Finding 4 (review, Task 7): html_to_adf had no <br> branch, so a
+        # Finding 4: html_to_adf had no <br> branch, so a
         # page containing a hard break could be fetched and rendered to
         # HTML+ but never converted back - splicing a change and
         # re-converting raised "<br> is not a known HTML+ element" on the
@@ -731,7 +731,7 @@ class TestRoundTrip(unittest.TestCase):
         )
 
     def test_space_between_two_marked_runs_survives(self):
-        # Finding 5 (review, Task 7): a lone space between two inline
+        # Finding 5: a lone space between two inline
         # elements is genuine content in a paragraph, not the inter-tag
         # formatting whitespace the same guard correctly discards at the
         # document root or inside a block-only container.
@@ -766,24 +766,21 @@ class TestUnsupportedAdfNode(unittest.TestCase):
     ADF documents are built directly, the way a page fetched from the API
     would arrive.
 
-    Finding 1 (review, Task 7) made adf_to_html raise here rather than
-    silently drop the node - correct at the time, because the only other
-    behaviour on offer was dropping it. Task 11b (this file) replaces that
-    with opaque passthrough, which is strictly better than either: nothing
-    is refused and nothing is lost. test_adf_to_html_refuses_rather_than_
-    drop_the_node asserted the Task 7 raise; it is replaced below by
-    test_adf_to_html_no_longer_raises_carries_the_node_through_opaque,
-    which asserts the Task 7 behaviour is deliberately gone (brief test 9).
+    adf_to_html used to raise on a node like this rather than silently drop
+    it - correct at the time, because the only other behaviour on offer was
+    dropping it. Opaque passthrough replaces that with something strictly
+    better: nothing is refused and nothing is lost. The test below asserts
+    the passthrough behaviour; an earlier version of this suite asserted
+    the raise it replaced.
 
-    UNSUPPORTED_DOC's middle node was mediaSingle/media until Task 14, which
-    is exactly the brief this class's fixture came from predating Task 14's
-    own brief: mediaSingle and media gained named HTML+ support there (a
-    file attachment, the shape attachments.sh upload produces), so a
-    mediaSingle no longer demonstrates "a node this converter cannot render
-    by name" - it demonstrates the opposite. Swapped for bodiedExtension,
-    which this converter has no named HTML+ syntax for at all (see
-    CONFLUENCE_ONLY's own note on it, below) and so remains a genuine
-    example of this class's premise.
+    UNSUPPORTED_DOC's middle node was mediaSingle/media until this
+    converter gained named HTML+ support for it (a file attachment, the
+    shape attachments.sh upload produces) - at which point a mediaSingle no
+    longer demonstrated "a node this converter cannot render by name", it
+    demonstrated the opposite. Swapped for bodiedExtension, which this
+    converter has no named HTML+ syntax for at all (see CONFLUENCE_ONLY's
+    own note on it, below) and so remains a genuine example of this class's
+    premise.
     """
 
     UNSUPPORTED_DOC = {
@@ -802,12 +799,12 @@ class TestUnsupportedAdfNode(unittest.TestCase):
     }
 
     def test_adf_to_html_no_longer_raises_carries_the_node_through_opaque(self):
-        # Brief test 9. Until Task 11b this raised ConversionError - the
-        # exact opposite of the assertion below - because the only
-        # alternative on offer at the time was silently dropping the node.
-        # Passthrough removes that trade-off: the unrecognised node is
-        # carried through as opaque HTML+ instead of being refused, and the
-        # two surrounding paragraphs are untouched.
+        # This used to raise ConversionError - the exact opposite of the
+        # assertion below - because the only alternative on offer at the
+        # time was silently dropping the node. Passthrough removes that
+        # trade-off: the unrecognised node is carried through as opaque
+        # HTML+ instead of being refused, and the two surrounding
+        # paragraphs are untouched.
         html = adf_to_html(self.UNSUPPORTED_DOC)
         self.assertIn('data-type="adf-opaque"', html)
         self.assertIn("Before.", html)
@@ -826,15 +823,12 @@ class TestUnsupportedAdfNode(unittest.TestCase):
 
 
 class TestOpaquePassthrough(unittest.TestCase):
-    """Task 11b: an unrecognised ADF node or mark is carried through
-    untouched rather than refused (a node) or silently dropped (a mark).
+    """An unrecognised ADF node or mark is carried through untouched rather
+    than refused (a node) or silently dropped (a mark).
 
     Fixtures here are invented, not lifted from any real page - an
     extension always carries extensionKey "com.example.macro", and media
-    ids/collections are placeholder strings. See task-11b-brief.md, whose
-    numbered test list this class follows one test per number (skipping 9,
-    which lives on TestUnsupportedAdfNode above, and 6's exact-format
-    variant, which already existed on TestUnsupportedAdfNode too).
+    ids/collections are placeholder strings.
     """
 
     EXTENSION_NODE = {
@@ -907,10 +901,10 @@ class TestOpaquePassthrough(unittest.TestCase):
         self.assertTrue(html.startswith('<div data-type="panel-info">'))
 
     def test_5_opaque_node_inside_a_code_block_converts(self):
-        # listItem was the brief's original fixture for this test, but
-        # "extension" is not in FORBIDDEN_CHILDREN["listItem"] - that
-        # fixture passed the validator regardless of whether the bypass
-        # existed, so it never actually exercised rule 3 (review finding).
+        # listItem was an earlier fixture for this test, but "extension" is
+        # not in FORBIDDEN_CHILDREN["listItem"] - that fixture passed the
+        # validator regardless of whether the bypass existed, so it never
+        # actually exercised rule 3 (a review finding).
         # codeBlock is TEXT_ONLY: normally *any* non-text child is rejected
         # there (test_status_cannot_sit_in_a_code_block covers a status
         # node), so it is the container where the bypass is actually
@@ -983,10 +977,10 @@ class TestOpaquePassthrough(unittest.TestCase):
 
 
 class TestOpaqueHardening(unittest.TestCase):
-    """Findings from the coordinator's review of Task 11b, verified fresh
-    rather than trusted: Critical 1 (silent content loss on an unclosed
-    opaque element) and Important 3-5 (data-adf validation, mark dedupe,
-    and the two numeric attrs _format_number missed).
+    """Review findings on opaque passthrough, verified fresh rather than
+    trusted: Critical 1 (silent content loss on an unclosed opaque element)
+    and Important 3-5 (data-adf validation, mark dedupe, and the two
+    numeric attrs _format_number missed).
     """
 
     def test_unclosed_opaque_node_raises_rather_than_silently_dropping_content(self):
@@ -1127,19 +1121,16 @@ class TestOpaqueHardening(unittest.TestCase):
 
 
 class TestMedia(unittest.TestCase):
-    """Task 14: named HTML+ support for mediaSingle/media/caption, so an
-    author can write a figure by hand rather than rely on opaque
-    passthrough alone.
+    """Named HTML+ support for mediaSingle/media/caption, so an author can
+    write a figure by hand rather than rely on opaque passthrough alone.
 
     The fixtures and the attrs modelled (width, height, localId on media;
     width, widthType on mediaSingle; localId on caption) come from
-    re-measuring this converter against 289 pages of a live Confluence site
-    (Task 14), not just the task-14-brief.md examples - the brief predates
-    opaque passthrough and did not know real pages carry widthType and
-    localId on nearly every figure. Modelling only the brief's narrower
-    attrs would have made every one of those real pages fail the round-trip
-    gate that used to pass them (opaquely); see task-14-report.md for the
-    before/after counts.
+    re-measuring this converter against 289 pages of a live Confluence
+    site: real pages carry widthType and localId on nearly every figure,
+    and modelling a narrower set of attrs would have made every one of
+    those real pages fail the round-trip gate that used to pass them
+    (opaquely).
     """
 
     FIGURE = (
@@ -1171,15 +1162,14 @@ class TestMedia(unittest.TestCase):
         self.assertIn("never invent one", str(cm.exception))
 
     def test_pretty_printed_figure_round_trips(self):
-        # Task 14 review finding: the brief's own worked example (task 14
-        # brief, Step 3) writes the figure across multiple indented lines -
-        # and mediaSingle's content model is block-only (a media node plus
-        # an optional caption), so without mediaSingle in
-        # BLOCK_ONLY_PARENTS the newline and indentation between </div> and
-        # <figcaption> is not formatting, it is a stray text node wedged
-        # into the mediaSingle's content list. The brief's own compact
-        # FIGURE constant above (no whitespace between tags) could not
-        # have caught this.
+        # A review finding: a hand-authored figure is often written across
+        # multiple indented lines, and mediaSingle's content model is
+        # block-only (a media node plus an optional caption), so without
+        # mediaSingle in BLOCK_ONLY_PARENTS the newline and indentation
+        # between </div> and <figcaption> is not formatting, it is a stray
+        # text node wedged into the mediaSingle's content list. The compact
+        # FIGURE constant above (no whitespace between tags) could not have
+        # caught this.
         pretty = (
             '<figure data-type="media-single" data-layout="center" data-width="80">\n'
             '  <div data-type="media" data-media-type="file" data-id="abc-123"\n'
@@ -1191,9 +1181,9 @@ class TestMedia(unittest.TestCase):
         self.assertEqual(doc, html_to_adf(self.FIGURE))
 
     def test_real_world_attrs_survive_layout_widthtype_height_localid(self):
-        # Task 14's live-site measurement: widthType is on 222/222 sampled
-        # mediaSingle nodes and localId on 136/232 media nodes - attrs the
-        # brief's own worked example never mentions. Dropping them would
+        # A live-site measurement: widthType is on 222/222 sampled
+        # mediaSingle nodes and localId on 136/232 media nodes - attrs a
+        # minimal hand-authored example never mentions. Dropping them would
         # fail check_roundtrip on nearly every real published figure.
         doc = {
             "type": "doc", "version": 1,
@@ -1220,9 +1210,9 @@ class TestMedia(unittest.TestCase):
         self.assertEqual(html_to_adf(html), doc)
 
     def test_a_caption_with_no_attrs_stays_that_way(self):
-        # The other real shape (Task 14 measurement: 16/35 sampled
-        # captions carry no attrs key at all) - proving the localId case
-        # above does not make attrs mandatory.
+        # The other real shape (a live-site measurement found 16/35
+        # sampled captions carry no attrs key at all) - proving the
+        # localId case above does not make attrs mandatory.
         doc = {
             "type": "doc", "version": 1,
             "content": [
@@ -1242,7 +1232,7 @@ class TestMedia(unittest.TestCase):
         self.assertNotIn("attrs", caption)
 
     def test_real_task_item_localid_survives_the_round_trip_gate(self):
-        # Live-proven, not assumed (Task 15): creating a page with a task
+        # Live-proven, not assumed: creating a page with a task
         # list through this converter, then reading it straight back,
         # showed Confluence had assigned every taskItem a real localId -
         # "6ffa3fef-674f-4bd7-b1b6-fc8340fc603e" and its sibling below are
@@ -1276,8 +1266,8 @@ class TestMedia(unittest.TestCase):
 
     def test_a_task_list_with_no_localid_key_stays_that_way(self):
         # Companion to the caption case above, and to the real-taskItem
-        # case before it. The earlier fix (Task 15's first pass) carried a
-        # present localId value through correctly but still defaulted a
+        # case before it. An earlier fix carried a present localId value
+        # through correctly but still defaulted a
         # MISSING key to "" on the way in, so a node that never had a
         # localId at all - not authored by hand, and not what Confluence
         # itself sends either, but the shape check_roundtrip must not
@@ -1325,7 +1315,7 @@ class TestMedia(unittest.TestCase):
         self.assertNotIn("localId", roundtripped["content"][0]["content"][0]["attrs"])
 
     def test_a_non_file_media_node_falls_back_to_opaque_not_a_crash(self):
-        # Task 14's live-site measurement found the other real media shape:
+        # A live-site measurement found the other real media shape:
         # type "external" (a bare url, no id or collection - pasting an
         # external image address rather than uploading a file). Named
         # rendering requires id and collection, so this must fall back to
@@ -1362,7 +1352,7 @@ class TestMedia(unittest.TestCase):
 
     def test_a_figure_around_an_unrenderable_media_still_round_trips(self):
         # The composite of the two cases above: a mediaSingle (always safe
-        # to render named - Task 14) wrapping a media node that is not
+        # to render named) wrapping a media node that is not
         # (the external case). The figure renders named; the media inside
         # it renders opaque; the whole thing still reads back unchanged.
         doc = {
@@ -1476,7 +1466,7 @@ class TestMedia(unittest.TestCase):
         self.assertEqual(html_to_adf(html), doc)
 
     def test_paragraph_cannot_hold_a_figure(self):
-        # Mirrors test_paragraph_cannot_hold_a_block_card (Task 7, Finding
+        # Mirrors test_paragraph_cannot_hold_a_block_card (Finding
         # 3): a figure is a block, exactly like a table or a panel, and a
         # <figure> written inside a <p> is silently accepted here and then
         # either rejected by the API or mis-rendered - refused instead, the
@@ -1658,8 +1648,8 @@ class TestRoundtripGate(unittest.TestCase):
         # "content" or "marks" key sitting *inside* an "attrs" value
         # re-armed is_node one level down, regardless of the fact that the
         # walk was already inside attrs and had no business trusting a
-        # "type" there at all. This exact fixture, confirmed by the
-        # reviewer, used to return "leak-attempt" - the attacker-chosen
+        # "type" there at all. This exact fixture, confirmed live,
+        # used to return "leak-attempt" - the attacker-chosen
         # value of a "type" key buried in attrs["content"][0] - instead of
         # "node", the actual enclosing ADF node's real type. is_node must
         # stay False for the rest of a subtree once it goes False, however
@@ -1694,8 +1684,9 @@ class TestRoundtripGate(unittest.TestCase):
 
     def test_opaque_passthrough_content_is_ok(self):
         # The gate must not flag passthrough content as unsafe - that is
-        # the whole point of Task 11b: an unrecognised node or mark is
-        # exactly the case this converter now carries through exactly.
+        # the whole point of opaque passthrough: an unrecognised node or
+        # mark is exactly the case this converter now carries through
+        # exactly.
         doc = {
             "type": "doc", "version": 1,
             "content": [
@@ -1765,9 +1756,8 @@ class TestJiraProfile(unittest.TestCase):
         self.assertIn("layoutSection", str(cm.exception))
 
     def test_a_status_hidden_in_an_opaque_wrapper_is_still_refused(self):
-        # The brief this task came from did not know opaque passthrough
-        # (Task 11b) existed yet: it checks CONFLUENCE_ONLY membership on
-        # the parsed tree html_to_adf returns, not on the HTML+ source. That
+        # This check runs against the parsed tree html_to_adf returns, not
+        # against the HTML+ source, checking CONFLUENCE_ONLY membership. That
         # is only safe if a Confluence-only node smuggled in through the
         # generic <span data-type="adf-opaque"> wrapper comes back out with
         # its real type restored rather than staying "adf-opaque" - proved

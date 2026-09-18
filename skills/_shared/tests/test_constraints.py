@@ -24,9 +24,9 @@ SELF = pathlib.Path(__file__).resolve()
 #   straight past every check here with no warning.
 # - Walking the filesystem with a denied-extension list (skip images, fonts,
 #   archives, compiled output) overcounts instead: it would sweep in this
-#   working tree's gitignored scratch content too - .superpowers/sdd/*.diff
-#   review artefacts, __pycache__/*.pyc - none of which ships. That is scope
-#   creep away from the actual question, which is "what reaches the public
+#   working tree's own gitignored scratch content too - agent working
+#   state, __pycache__/*.pyc - none of which ships. That is scope creep
+#   away from the actual question, which is "what reaches the public
 #   repository", not "what exists on this machine right now".
 #
 # `git ls-files` answers the actual question directly: exactly the files
@@ -68,11 +68,11 @@ class TestNothingClientSpecific(unittest.TestCase):
 
     # Built from fragments, deliberately. The client's name and hostname
     # must never appear contiguously anywhere in this public repository,
-    # including here, in the file whose job is to detect them - the brief's
-    # original "com" + "pre" concatenation had exactly the right idea, and a
-    # better regex still has to keep that property. Every fixture below that
-    # needs to represent the real name or host is built the same way, not
-    # spelled out.
+    # including here, in the file whose job is to detect them - the
+    # "com" + "pre" concatenation below keeps that property, and a better
+    # regex still has to keep it too. Every fixture below that needs to
+    # represent the real name or host is built the same way, not spelled
+    # out.
     _NAME = "com" + "pre"
     _HOST = _NAME + "services" + ".atlassian.net"
 
