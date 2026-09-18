@@ -1,5 +1,6 @@
 """Repo-wide constraints. These hold the promises the README makes."""
 
+import os
 import pathlib
 import re
 import subprocess
@@ -439,6 +440,196 @@ class TestPublishRefusesAnEmptyBody(unittest.TestCase):
             with_pipefail.returncode, 0,
             "set -o pipefail did not catch the crashed first stage of the pipe",
         )
+
+
+class TestTokenNeverReachesProcessArgv(unittest.TestCase):
+    """atlassian-setup.sh writes the token through jq's environment, not
+    --arg. jq's own argv is a separate process's command line, and
+    /proc/<pid>/cmdline is world-readable - the exact leak the "token never
+    reaches a command line" rule elsewhere in this repository exists to
+    close for curl, and had been left open here for jq.
+    """
+
+    SETUP_SH = REPO / "skills" / "_shared" / "scripts" / "atlassian-setup.sh"
+
+    def test_the_saved_token_never_appears_in_jqs_own_argv(self):
+        import json
+        import os
+        import shutil
+        import tempfile
+
+        text = self.SETUP_SH.read_text(encoding="utf-8")
+        match = re.search(r'UMASK_OLD=\$\(umask\).*?> "\$CONFIG_FILE"\n', text, re.S)
+        self.assertIsNotNone(
+            match,
+            "atlassian-setup.sh's credential-write block has changed shape "
+            "- update this test's extraction pattern to match.",
+        )
+        write_block = match.group(0)
+
+        real_jq = shutil.which("jq")
+        self.assertIsNotNone(real_jq, "jq must be on PATH to run this test")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = pathlib.Path(tmp)
+            config_dir = tmp / "config"
+            config_dir.mkdir()
+            config_file = config_dir / "config.json"
+            argv_log = tmp / "jq-argv.log"
+
+            # A fake jq on PATH ahead of the real one, so the write block
+            # under test calls this instead - it logs its own argv, exactly
+            # what /proc/<pid>/cmdline would have carried, then delegates to
+            # the real jq so the write block's own behaviour is unaffected.
+            fake_bin = tmp / "bin"
+            fake_bin.mkdir()
+            fake_jq = fake_bin / "jq"
+            fake_jq.write_text(
+                "#!/bin/bash\n"
+                f'printf \'%s\\n\' "$*" >> "{argv_log}"\n'
+                f'exec "{real_jq}" "$@"\n'
+            )
+            fake_jq.chmod(0o755)
+
+            secret = "super-secret-token-value"
+            harness = (
+                'CONFIG_DIR="$1"; CONFIG_FILE="$2"; SITE="$3"; EMAIL="$4"; '
+                'TOKEN="$5"; CONFLUENCE="$6"\n' + write_block
+            )
+            result = subprocess.run(
+                ["bash", "-c", harness, "bash",
+                 str(config_dir), str(config_file),
+                 "https://example.atlassian.net", "dan@example.com",
+                 secret, "yes"],
+                capture_output=True, text=True,
+                env={"PATH": f"{fake_bin}:{os.environ.get('PATH', '')}"},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(config_file.is_file(), result.stderr)
+            saved = json.loads(config_file.read_text())
+            self.assertEqual(saved["token"], secret)
+
+            argv_text = argv_log.read_text() if argv_log.exists() else ""
+            self.assertNotIn(
+                secret, argv_text,
+                "the token reached jq's own argv - /proc/<pid>/cmdline "
+                "would have carried it in plain text",
+            )
+
+
+class TestTokenTempFileCleanupOnSignal(unittest.TestCase):
+    """A curl config file naming the token must not survive a signal.
+
+    The `rm -f` at the end of each of api(), attachments.sh and
+    atlassian-setup.sh's verify() only runs on a normal return. A signal -
+    Ctrl-C while curl is mid-request, a killed parent - skips straight past
+    it unless a trap on EXIT/INT/TERM/HUP cleans up independently of how the
+    function was left. This exercises that directly: a fake, slow curl gives
+    the test a window to send a real signal while the config file exists,
+    then checks it is gone.
+    """
+
+    def _wait_for_new_file(self, directory, before, timeout=5):
+        import time
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            found = set(os.listdir(directory)) - before
+            if found:
+                return directory / next(iter(found))
+            time.sleep(0.05)
+        return None
+
+    def _assert_cleans_up_on_term(self, argv, env):
+        import signal
+        import tempfile
+        import time
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = pathlib.Path(tmp)
+            env = dict(env)
+            env["TMPDIR"] = str(tmp)
+            before = set(os.listdir(tmp))
+            # A real Ctrl-C delivers SIGINT to the whole foreground process
+            # group at once - the script AND the curl (here, faked sleep)
+            # it is waiting on - which is what actually unblocks bash's
+            # wait() promptly: the trap is deferred until the child bash is
+            # waiting on exits, and only a process-group-wide signal makes
+            # that child exit right away rather than after its own full
+            # duration. start_new_session=True gives this process its own
+            # group so the signal can be aimed at exactly it (and nothing
+            # belonging to the test runner itself), and killpg reproduces
+            # that whole-group delivery rather than sending to the script's
+            # own PID alone, which would leave it still blocked on its
+            # child.
+            proc = subprocess.Popen(
+                argv, env=env,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            try:
+                cfg = self._wait_for_new_file(tmp, before)
+                self.assertIsNotNone(cfg, "the curl config file never appeared")
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                proc.wait(timeout=5)
+                deadline = time.time() + 2
+                while cfg.exists() and time.time() < deadline:
+                    time.sleep(0.05)
+                self.assertFalse(
+                    cfg.exists(),
+                    f"{cfg} still exists after SIGTERM - the trap did not "
+                    f"clean it up",
+                )
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait()
+
+    def test_common_sh_api_cleans_up_its_config_file_on_sigterm(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as bin_dir, \
+             tempfile.TemporaryDirectory() as home:
+            bin_dir = pathlib.Path(bin_dir)
+            fake_curl = bin_dir / "curl"
+            fake_curl.write_text("#!/bin/bash\nsleep 30\n")
+            fake_curl.chmod(0o755)
+            common_sh = REPO / "skills" / "_shared" / "scripts" / "_common.sh"
+            harness = (
+                f'. "{common_sh}"; SITE=https://example.atlassian.net; '
+                f'EMAIL=e@x.com; TOKEN=secret; api GET /rest/api/3/myself'
+            )
+            self._assert_cleans_up_on_term(
+                ["bash", "-c", harness],
+                {"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+                 "HOME": home},
+            )
+
+    def test_attachments_sh_cleans_up_its_config_file_on_sigterm(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as bin_dir, \
+             tempfile.TemporaryDirectory() as home:
+            bin_dir = pathlib.Path(bin_dir)
+            fake_curl = bin_dir / "curl"
+            fake_curl.write_text("#!/bin/bash\nsleep 30\n")
+            fake_curl.chmod(0o755)
+
+            home = pathlib.Path(home)
+            config_dir = home / ".dbhq" / "atlassian"
+            config_dir.mkdir(parents=True)
+            (config_dir / "config.json").write_text(
+                '{"site":"https://example.atlassian.net",'
+                '"email":"e@x.com","token":"secret"}'
+            )
+            upload_file = home / "diagram.png"
+            upload_file.write_text("data")
+
+            script = (REPO / "skills" / "confluence-publish" / "scripts"
+                      / "attachments.sh")
+            self._assert_cleans_up_on_term(
+                ["bash", str(script), "upload", "1234567", str(upload_file)],
+                {"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+                 "HOME": str(home)},
+            )
 
 
 if __name__ == "__main__":

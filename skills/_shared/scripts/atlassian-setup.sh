@@ -73,6 +73,10 @@ echo
 verify() {
     local cfg out nl
     cfg=$(mktemp); chmod 600 "$cfg"
+    # Same reason as _common.sh's api(): the `rm -f "$cfg"` below only runs
+    # on a normal return, and a signal mid-request would otherwise leave a
+    # file naming the token in plain text sitting in /tmp.
+    trap 'rm -f "$cfg"' EXIT INT TERM HUP
     {
         printf 'url = "%s%s"\n' "$SITE" "$1"
         printf 'user = "%s:%s"\n' "$EMAIL" "$TOKEN"
@@ -125,8 +129,14 @@ fi
 mkdir -p "$CONFIG_DIR"
 chmod 700 "$CONFIG_DIR"
 UMASK_OLD=$(umask); umask 077
-jq -n --arg site "$SITE" --arg email "$EMAIL" --arg token "$TOKEN" --arg conf "$CONFLUENCE" \
-    '{site: $site, email: $email, token: $token, confluence: ($conf == "yes")}' > "$CONFIG_FILE"
+# The token goes in through the environment (env.TOKEN), not --arg. jq's
+# argv is its own process's command line, and /proc/<pid>/cmdline is
+# world-readable - the exact leak the token-never-reaches-a-command-line
+# rule elsewhere in this repository exists to close. TOKEN="$TOKEN" sets it
+# only in this one child process's environment, which is not world-readable
+# the way its argv is.
+TOKEN="$TOKEN" jq -n --arg site "$SITE" --arg email "$EMAIL" --arg conf "$CONFLUENCE" \
+    '{site: $site, email: $email, token: env.TOKEN, confluence: ($conf == "yes")}' > "$CONFIG_FILE"
 umask "$UMASK_OLD"
 chmod 600 "$CONFIG_FILE"
 

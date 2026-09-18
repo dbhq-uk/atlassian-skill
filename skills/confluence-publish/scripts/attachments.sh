@@ -87,6 +87,10 @@ require_config
 # reading of "replaces it" would suggest - so the usage text above says so.
 CFG=$(mktemp) || { echo "Error: cannot create a temp file for the curl config." >&2; exit 1; }
 chmod 600 "$CFG"
+# Same reason as _common.sh's api(): the `rm -f "$CFG"` below only runs on a
+# normal return, and a signal mid-upload would otherwise leave a file naming
+# the token in plain text sitting in /tmp.
+trap 'rm -f "$CFG"' EXIT INT TERM HUP
 {
     printf 'url = "%s/wiki/rest/api/content/%s/child/attachment"\n' "$SITE" "$PAGE_ID"
     printf 'user = "%s:%s"\n' "$EMAIL" "$TOKEN"

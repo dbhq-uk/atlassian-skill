@@ -87,6 +87,13 @@ api() {
 
     cfg=$(mktemp) || { echo "Error: cannot create a temp file for the curl config." >&2; exit 1; }
     chmod 600 "$cfg"
+    # The `rm -f "$cfg"` below only runs on a normal return from this
+    # function. A signal - Ctrl-C while curl is mid-request, a killed parent
+    # - skips straight past it and leaves a file naming the token in plain
+    # text (`user = "email:TOKEN"`) sitting in /tmp. The trap is the same
+    # cleanup on every exit path, not just the one this function's own
+    # control flow happens to reach.
+    trap 'rm -f "$cfg"' EXIT INT TERM HUP
     {
         printf 'url = "%s%s"\n' "$SITE" "$path"
         printf 'user = "%s:%s"\n' "$EMAIL" "$TOKEN"
