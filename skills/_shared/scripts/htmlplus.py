@@ -105,13 +105,20 @@ FORBIDDEN_CHILDREN = {
     # sentinel would reject too (status, date, inlineCard) - it only needs
     # to reject the block-shaped things a <p> can end up wrapping through
     # this parser, notably a block/embed card that was written nested
-    # inside a paragraph rather than left as a sibling of it.
+    # inside a paragraph rather than left as a sibling of it. mediaSingle
+    # and media joined this set in Task 14, for the same reason: a figure
+    # is a block, exactly like a table or a panel, and cannot sit inside a
+    # paragraph either.
     "paragraph": {"blockCard", "embedCard", "table", "panel", "expand",
-                  "layoutSection", "heading", "rule"},
+                  "layoutSection", "heading", "rule", "mediaSingle", "media"},
     # Inline-content-only containers: any block child at all is a violation.
     "taskItem": None,
     "decisionItem": None,
     "heading": None,
+    # Task 14. A caption's content model is inline text only (the same
+    # shape as a heading or a task item), not the codeBlock TEXT_ONLY
+    # sentinel below it - a caption can still hold, say, a status lozenge.
+    "caption": None,
     "codeBlock": TEXT_ONLY,
 }
 
@@ -121,6 +128,7 @@ BLOCK_TYPES = {
     "panel", "expand", "blockquote", "bulletList", "orderedList", "listItem",
     "taskList", "taskItem", "decisionList", "decisionItem", "codeBlock",
     "layoutSection", "layoutColumn", "rule", "blockCard", "embedCard",
+    "mediaSingle", "media",
 }
 
 # Containers whose ADF content model is blocks only - a bare text node sitting
@@ -147,10 +155,21 @@ BLOCK_TYPES = {
 # (parent bulletList at that point, not listItem, which already closed)
 # would have been kept as a stray text node - the very regression the
 # fix for the mark-order space-eating bug had to avoid reintroducing.
+#
+# mediaSingle joined this set in Task 14, for the same reason: its content
+# is a media leaf plus an optional caption, block-only the same way a
+# listItem's is, and every real published figure this converter was
+# checked against (Task 14's live-site round-trip re-measure) is written
+# pretty-printed - a newline and indentation between <div data-type="media">
+# and <figcaption>. Without this entry that whitespace is content, not
+# formatting: it lands as a stray text node wedged between the media and
+# the caption, which is exactly the class of bug BLOCK_ONLY_PARENTS exists
+# to prevent for every other block-only container.
 BLOCK_ONLY_PARENTS = {"listItem", "tableCell", "tableHeader", "panel",
                       "blockquote", "taskList", "decisionList",
                       "bulletList", "orderedList", "table", "tableRow",
-                      "layoutSection", "layoutColumn", "expand"}
+                      "layoutSection", "layoutColumn", "expand",
+                      "mediaSingle"}
 
 
 def a_or_an(word):
@@ -180,6 +199,32 @@ def _date_to_timestamp(value):
         )
     epoch = calendar.timegm(day.timetuple())
     return str(epoch * 1000)
+
+
+def _parse_float(raw, attr_name):
+    """A dimension attribute (mediaSingle.width, media.width, media.height)
+    as a float - ConversionError, not a bare traceback, for anything
+    float() cannot parse.
+
+    Deliberately separate from _parse_plain_number: that helper's plain
+    whole-number rule is right for data-colwidth/colspan/rowspan/table
+    width, which Confluence drops outright unless they are a plain integer
+    with no unit. A mediaSingle or media dimension is different - it is
+    genuinely float-valued in ADF (measured against a live site, Task 14:
+    every real mediaSingle.width is a JSON number, and a resize in the
+    Confluence editor can leave a non-integer pixel value) - so this parses
+    the wider "number" shape rather than isdecimal()'s integer-only one,
+    while still refusing a unit or anything else int()/float() cannot read
+    with a named ConversionError rather than a raw traceback.
+    """
+    try:
+        return float(raw)
+    except ValueError:
+        raise ConversionError(
+            f'{attr_name}="{raw}" is not a number. Confluence drops '
+            f"anything else rather than coercing it. Write a plain number, "
+            f"never a unit."
+        )
 
 
 def _parse_plain_number(raw, attr_name):
@@ -280,6 +325,17 @@ class _Builder(HTMLParser):
         # matched back out of self.marks by identity (not by type, the way
         # INLINE_MARKS closes) when its </span> arrives - see handle_endtag.
         self._opaque_mark_stack = []
+        # Tag names of currently-open media leaf elements, innermost last -
+        # the same shape as _opaque_stack and for the same reason (Task 14).
+        # <div data-type="media"> is a leaf: it never opens a real block, so
+        # its own </div> must not fall into the generic
+        # "div closes whatever _open pushed" handling in handle_endtag,
+        # which would pop the mediaSingle (or whatever else) actually open
+        # at that point instead. Also read by handle_data, which ignores
+        # anything written between a media element's open and close tag -
+        # the node is fully described by its attributes, so stray text or
+        # pretty-printing whitespace there is not content.
+        self._media_stack = []
 
     # --- helpers ---
 
@@ -589,6 +645,62 @@ class _Builder(HTMLParser):
             frame["cell_index"] += 1
             self._open({"type": node_type, "attrs": cell_attrs})
 
+        elif tag == "figure" and dtype == "media-single":
+            attrs_out = {"layout": a.get("data-layout", "center")}
+            if "data-width" in a:
+                attrs_out["width"] = _parse_float(a["data-width"], "data-width")
+            if "data-width-type" in a:
+                attrs_out["widthType"] = a["data-width-type"]
+            self._open({"type": "mediaSingle", "attrs": attrs_out})
+
+        elif tag == "div" and dtype == "media":
+            media_id = a.get("data-id", "")
+            collection = a.get("data-collection", "")
+            if not media_id or not collection:
+                raise ConversionError(
+                    "A media node needs both data-id and data-collection. "
+                    "Both come from attachments.sh upload - never invent one."
+                )
+            node_attrs = {
+                "id": media_id,
+                "type": a.get("data-media-type", "file"),
+                "collection": collection,
+            }
+            if "data-alt" in a:
+                node_attrs["alt"] = a["data-alt"]
+            # width/height/localId are optional and round-trip only - there
+            # is no reason to author them by hand, but a real fetched page
+            # carries all three on nearly every media node (Task 14's
+            # live-site measurement: width and height on 222/222 sampled
+            # mediaSingle images, localId on 136/232), and dropping them
+            # silently would fail the round-trip gate on every one.
+            if "data-width" in a:
+                node_attrs["width"] = _parse_float(a["data-width"], "data-width")
+            if "data-height" in a:
+                node_attrs["height"] = _parse_float(a["data-height"], "data-height")
+            if "data-local-id" in a:
+                node_attrs["localId"] = a["data-local-id"]
+            # A leaf, like hardBreak/rule/status - appended through _append
+            # (not the raw list.append the brief this came from used) so it
+            # is checked against _check_nesting like everything else that
+            # reaches the tree, and pushed onto _media_stack so its own
+            # </div> is swallowed rather than closing whatever real block
+            # happens to be open (see _media_stack's own comment).
+            self._append({"type": "media", "attrs": node_attrs})
+            self._media_stack.append(tag)
+
+        elif tag == "figcaption":
+            # Task 14 live-site measurement: 19 of 35 real captions carry
+            # an attrs.localId Confluence assigned; the rest carry no attrs
+            # key at all. Both shapes are preserved - an omitted key here,
+            # not an empty {} placeholder, matching how the rest of this
+            # file already treats an absent optional attribute (see
+            # _close's own note on omitting rather than emitting empty).
+            node = {"type": "caption"}
+            if "data-local-id" in a:
+                node["attrs"] = {"localId": a["data-local-id"]}
+            self._open(node)
+
         elif tag in ("div", "span") and dtype == ADF_OPAQUE:
             # Rule 3 (Task 11b): the nesting validator does not inspect an
             # opaque node's contents and does not reject it for its position
@@ -623,6 +735,16 @@ class _Builder(HTMLParser):
             # run through the generic handling below and pop the real open
             # block, since this element never pushed one.
             self._opaque_stack.pop()
+            return
+        if self._media_stack and self._media_stack[-1] == tag:
+            # The matching close of a media leaf's open tag - see the
+            # "div"+"media" branch in handle_starttag. Swallowed for the
+            # same reason as the opaque case just above: <div data-type=
+            # "media"> never pushed a real block, so its own </div> must
+            # not fall into the generic div-close handling below, which
+            # would pop whatever block (the enclosing mediaSingle, most of
+            # the time) actually is open.
+            self._media_stack.pop()
             return
         if tag in INLINE_MARKS and self.marks:
             for i in range(len(self.marks) - 1, -1, -1):
@@ -675,6 +797,8 @@ class _Builder(HTMLParser):
         elif tag in ("p", "div", "details", "pre", "ol", "blockquote") \
                 or tag in HEADINGS or tag in ("ul", "li"):
             self._close()
+        elif tag in ("figure", "figcaption"):
+            self._close()
         elif tag == "table":
             if not self._table_stack:
                 # A </table> with no matching open <table> - the parser
@@ -695,6 +819,12 @@ class _Builder(HTMLParser):
         if self._opaque_stack:
             # Nothing between an opaque node's open and close tag is
             # meaningful - its content already travelled in data-adf.
+            return
+        if self._media_stack:
+            # A media element is fully described by its attributes and is
+            # always written empty (<div ... ></div>); stray text or
+            # pretty-printing whitespace between its open and close tag is
+            # not content, the same as an opaque node just above.
             return
         if self._in_card:
             # A smart link renders its anchor text from the target, so any
@@ -784,6 +914,14 @@ def html_to_adf(fragment):
         unclosed = ADF_OPAQUE
     elif builder._opaque_mark_stack:
         unclosed = ADF_OPAQUE_MARK
+    elif builder._media_stack:
+        # The same problem again, one level down, for Task 14's media leaf:
+        # a <div data-type="media"> never pushes onto builder.blocks either
+        # (it is a leaf, like the opaque case above), so an unclosed one is
+        # just as invisible to the first check, and handle_data's matching
+        # "ignore everything while a media element is open" guard would
+        # otherwise swallow every paragraph after the break the same way.
+        unclosed = "media"
     if unclosed:
         raise ConversionError(
             f'Unclosed "{unclosed}" element: the fragment ended before it '
@@ -1020,6 +1158,39 @@ def _node_to_html(node):
     if t in ("blockCard", "embedCard"):
         appearance = "block" if t == "blockCard" else "embed"
         return f'<a href="{a["url"]}" data-card-appearance="{appearance}"></a>'
+    if t == "mediaSingle":
+        bits = [f'data-layout="{a.get("layout", "center")}"']
+        if "width" in a:
+            bits.append(f'data-width="{_format_number(a["width"])}"')
+        if "widthType" in a:
+            bits.append(f'data-width-type="{a["widthType"]}"')
+        return (f'<figure data-type="media-single" {" ".join(bits)}>'
+                f"{_children_html(node)}</figure>")
+    if t == "media" and a.get("type", "file") == "file" \
+            and "id" in a and "collection" in a:
+        # Named support only for the shape this converter can represent
+        # completely: a file attachment with an id and a collection - what
+        # attachments.sh upload actually produces. A media node of any
+        # other shape (Task 14's live-site measurement found "external"
+        # media on a real page: no id or collection, a bare url instead)
+        # falls through to the opaque branch at the end of this function
+        # instead, the same as any other node this converter does not fully
+        # model - never a KeyError on a["id"], and never a narrower,
+        # lossy render of something this converter cannot round-trip.
+        bits = [f'data-media-type="{a.get("type", "file")}"',
+                f'data-id="{a["id"]}"', f'data-collection="{a["collection"]}"']
+        if "alt" in a:
+            bits.append(f'data-alt="{a["alt"]}"')
+        if "width" in a:
+            bits.append(f'data-width="{_format_number(a["width"])}"')
+        if "height" in a:
+            bits.append(f'data-height="{_format_number(a["height"])}"')
+        if "localId" in a:
+            bits.append(f'data-local-id="{a["localId"]}"')
+        return f'<div data-type="media" {" ".join(bits)}></div>'
+    if t == "caption":
+        bits = f' data-local-id="{a["localId"]}"' if "localId" in a else ""
+        return f"<figcaption{bits}>{_inline_html(node)}</figcaption>"
     if t in _INLINE_LEAF_TYPES:
         # A known inline leaf type reached in block position. Not something
         # a well-formed ADF tree produces - text/status/date/inlineCard/
@@ -1121,6 +1292,20 @@ def _node_to_md(node, depth=0):
         return "\n\n".join(_node_to_md(c) for c in node.get("content", []))
     if t in ("blockCard", "embedCard"):
         return a.get("url", "")
+    if t == "mediaSingle":
+        return "\n".join(_node_to_md(c) for c in node.get("content", []))
+    if t == "media":
+        # .get(), not a["id"] - this rendering never raises (see the note
+        # below), and Task 14's live-site measurement found a real media
+        # node shape this converter has no named HTML+ for at all
+        # ("external": a url, no id or collection). id first because that
+        # is what an attachment actually is; url as the fallback for that
+        # shape, so reading an external image still names something rather
+        # than "attachment:None".
+        ref = a.get("id") or a.get("url", "unknown")
+        return f'![{a.get("alt", "image")}](attachment:{ref})'
+    if t == "caption":
+        return f"*{_inline_md(node)}*"
     # Deliberately not a ConversionError, unlike adf_to_html's equivalent
     # fallback. This rendering is documented one-way and read-only, never
     # written back, so there is no unsafe overwrite to guard against - an

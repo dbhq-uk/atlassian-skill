@@ -761,10 +761,10 @@ class TestUnsupportedAdfNode(unittest.TestCase):
     """A node type this converter cannot render by name.
 
     A real fetched Confluence page can carry node types this converter has
-    no HTML+ for - media, mention, emoji, extension and more. There is no
-    HTML+ syntax to construct one through html_to_adf, so these ADF
-    documents are built directly, the way a page fetched from the API would
-    arrive.
+    no HTML+ for - mention, emoji, extension, bodiedExtension and more.
+    There is no HTML+ syntax to construct one through html_to_adf, so these
+    ADF documents are built directly, the way a page fetched from the API
+    would arrive.
 
     Finding 1 (review, Task 7) made adf_to_html raise here rather than
     silently drop the node - correct at the time, because the only other
@@ -774,6 +774,16 @@ class TestUnsupportedAdfNode(unittest.TestCase):
     drop_the_node asserted the Task 7 raise; it is replaced below by
     test_adf_to_html_no_longer_raises_carries_the_node_through_opaque,
     which asserts the Task 7 behaviour is deliberately gone (brief test 9).
+
+    UNSUPPORTED_DOC's middle node was mediaSingle/media until Task 14, which
+    is exactly the brief this class's fixture came from predating Task 14's
+    own brief: mediaSingle and media gained named HTML+ support there (a
+    file attachment, the shape attachments.sh upload produces), so a
+    mediaSingle no longer demonstrates "a node this converter cannot render
+    by name" - it demonstrates the opposite. Swapped for bodiedExtension,
+    which this converter has no named HTML+ syntax for at all (see
+    CONFLUENCE_ONLY's own note on it, below) and so remains a genuine
+    example of this class's premise.
     """
 
     UNSUPPORTED_DOC = {
@@ -781,10 +791,11 @@ class TestUnsupportedAdfNode(unittest.TestCase):
         "content": [
             {"type": "paragraph",
              "content": [{"type": "text", "text": "Before."}]},
-            {"type": "mediaSingle", "attrs": {"layout": "center"},
-             "content": [{"type": "media",
-                          "attrs": {"type": "file", "id": "abc123",
-                                    "collection": "x"}}]},
+            {"type": "bodiedExtension",
+             "attrs": {"extensionType": "com.atlassian.confluence.macro.core",
+                       "extensionKey": "com.example.macro", "parameters": {}},
+             "content": [{"type": "paragraph",
+                          "content": [{"type": "text", "text": "Inside."}]}]},
             {"type": "paragraph",
              "content": [{"type": "text", "text": "After."}]},
         ],
@@ -810,7 +821,7 @@ class TestUnsupportedAdfNode(unittest.TestCase):
         # a hard failure for an agent that is only trying to read the page.
         md = adf_to_markdown(self.UNSUPPORTED_DOC)
         self.assertIn("Before.", md)
-        self.assertIn("[unsupported node: mediaSingle]", md)
+        self.assertIn("[unsupported node: bodiedExtension]", md)
         self.assertIn("After.", md)
 
 
@@ -1113,6 +1124,229 @@ class TestOpaqueHardening(unittest.TestCase):
             )
         self.assertIn("colspan", str(cm.exception))
         self.assertIn("plain number", str(cm.exception))
+
+
+class TestMedia(unittest.TestCase):
+    """Task 14: named HTML+ support for mediaSingle/media/caption, so an
+    author can write a figure by hand rather than rely on opaque
+    passthrough alone.
+
+    The fixtures and the attrs modelled (width, height, localId on media;
+    width, widthType on mediaSingle; localId on caption) come from
+    re-measuring this converter against 289 pages of a live Confluence site
+    (Task 14), not just the task-14-brief.md examples - the brief predates
+    opaque passthrough and did not know real pages carry widthType and
+    localId on nearly every figure. Modelling only the brief's narrower
+    attrs would have made every one of those real pages fail the round-trip
+    gate that used to pass them (opaquely); see task-14-report.md for the
+    before/after counts.
+    """
+
+    FIGURE = (
+        '<figure data-type="media-single" data-layout="center" data-width="80">'
+        '<div data-type="media" data-media-type="file" data-id="abc-123" '
+        'data-collection="contentId-999" data-alt="diagram.svg"></div>'
+        "<figcaption>The diagram</figcaption></figure>"
+    )
+
+    def test_figure_becomes_a_media_single(self):
+        doc = html_to_adf(self.FIGURE)
+        node = doc["content"][0]
+        self.assertEqual(node["type"], "mediaSingle")
+        self.assertEqual(node["attrs"], {"layout": "center", "width": 80.0})
+        self.assertEqual(node["content"][0]["type"], "media")
+        self.assertEqual(node["content"][0]["attrs"]["id"], "abc-123")
+        self.assertEqual(node["content"][1]["type"], "caption")
+
+    def test_media_round_trips(self):
+        once = html_to_adf(self.FIGURE)
+        self.assertEqual(once, html_to_adf(adf_to_html(once)))
+
+    def test_an_invented_media_id_is_refused(self):
+        with self.assertRaises(ConversionError) as cm:
+            html_to_adf(
+                '<figure data-type="media-single">'
+                '<div data-type="media" data-id="made-up"></div></figure>'
+            )
+        self.assertIn("never invent one", str(cm.exception))
+
+    def test_pretty_printed_figure_round_trips(self):
+        # Task 14 review finding: the brief's own worked example (task 14
+        # brief, Step 3) writes the figure across multiple indented lines -
+        # and mediaSingle's content model is block-only (a media node plus
+        # an optional caption), so without mediaSingle in
+        # BLOCK_ONLY_PARENTS the newline and indentation between </div> and
+        # <figcaption> is not formatting, it is a stray text node wedged
+        # into the mediaSingle's content list. The brief's own compact
+        # FIGURE constant above (no whitespace between tags) could not
+        # have caught this.
+        pretty = (
+            '<figure data-type="media-single" data-layout="center" data-width="80">\n'
+            '  <div data-type="media" data-media-type="file" data-id="abc-123"\n'
+            '       data-collection="contentId-999" data-alt="diagram.svg"></div>\n'
+            "  <figcaption>The diagram</figcaption>\n"
+            "</figure>\n"
+        )
+        doc = html_to_adf(pretty)
+        self.assertEqual(doc, html_to_adf(self.FIGURE))
+
+    def test_real_world_attrs_survive_layout_widthtype_height_localid(self):
+        # Task 14's live-site measurement: widthType is on 222/222 sampled
+        # mediaSingle nodes and localId on 136/232 media nodes - attrs the
+        # brief's own worked example never mentions. Dropping them would
+        # fail check_roundtrip on nearly every real published figure.
+        doc = {
+            "type": "doc", "version": 1,
+            "content": [
+                {"type": "mediaSingle",
+                 "attrs": {"layout": "align-start", "width": 542,
+                           "widthType": "pixel"},
+                 "content": [
+                     {"type": "media", "attrs": {
+                         "type": "file", "id": "abc-123",
+                         "collection": "contentId-999",
+                         "width": 732, "height": 676,
+                         "localId": "b8208ef164ce",
+                     }},
+                     {"type": "caption", "attrs": {"localId": "1ff11c92d9d0"},
+                      "content": [{"type": "text", "text": "As built"}]},
+                 ]},
+            ],
+        }
+        ok, differing_type = check_roundtrip(doc)
+        self.assertTrue(ok, differing_type)
+        html = adf_to_html(doc)
+        self.assertNotIn("adf-opaque", html)
+        self.assertEqual(html_to_adf(html), doc)
+
+    def test_a_caption_with_no_attrs_stays_that_way(self):
+        # The other real shape (Task 14 measurement: 16/35 sampled
+        # captions carry no attrs key at all) - proving the localId case
+        # above does not make attrs mandatory.
+        doc = {
+            "type": "doc", "version": 1,
+            "content": [
+                {"type": "mediaSingle", "attrs": {"layout": "center"},
+                 "content": [
+                     {"type": "media", "attrs": {
+                         "type": "file", "id": "abc-123",
+                         "collection": "contentId-999"}},
+                     {"type": "caption",
+                      "content": [{"type": "text", "text": "As built"}]},
+                 ]},
+            ],
+        }
+        roundtripped = html_to_adf(adf_to_html(doc))
+        self.assertEqual(roundtripped, doc)
+        caption = roundtripped["content"][0]["content"][1]
+        self.assertNotIn("attrs", caption)
+
+    def test_a_non_file_media_node_falls_back_to_opaque_not_a_crash(self):
+        # Task 14's live-site measurement found the other real media shape:
+        # type "external" (a bare url, no id or collection - pasting an
+        # external image address rather than uploading a file). Named
+        # rendering requires id and collection, so this must fall back to
+        # the same opaque passthrough an unrecognised node type gets,
+        # rather than a KeyError on a["id"].
+        doc = {
+            "type": "doc", "version": 1,
+            "content": [
+                {"type": "media", "attrs": {
+                    "type": "external", "alt": "chart.png",
+                    "url": "https://example.atlassian.net/wiki/download/x.png",
+                    "width": 721, "height": 293,
+                }},
+            ],
+        }
+        html = adf_to_html(doc)
+        self.assertIn('data-type="adf-opaque"', html)
+        self.assertEqual(html_to_adf(html), doc)
+
+    def test_a_media_node_missing_collection_falls_back_to_opaque(self):
+        # The narrower case of the same rule: type "file" but no
+        # collection is not a shape this converter's named renderer can
+        # represent either (attachments.sh upload always returns both), so
+        # it must not crash on a["collection"].
+        doc = {
+            "type": "doc", "version": 1,
+            "content": [
+                {"type": "media", "attrs": {"type": "file", "id": "abc-123"}},
+            ],
+        }
+        html = adf_to_html(doc)
+        self.assertIn('data-type="adf-opaque"', html)
+        self.assertEqual(html_to_adf(html), doc)
+
+    def test_a_figure_around_an_unrenderable_media_still_round_trips(self):
+        # The composite of the two cases above: a mediaSingle (always safe
+        # to render named - Task 14) wrapping a media node that is not
+        # (the external case). The figure renders named; the media inside
+        # it renders opaque; the whole thing still reads back unchanged.
+        doc = {
+            "type": "doc", "version": 1,
+            "content": [
+                {"type": "mediaSingle", "attrs": {"layout": "center"},
+                 "content": [
+                     {"type": "media", "attrs": {
+                         "type": "external", "url": "https://example.com/x.png"}},
+                 ]},
+            ],
+        }
+        html = adf_to_html(doc)
+        self.assertTrue(html.startswith('<figure data-type="media-single"'))
+        self.assertIn('data-type="adf-opaque"', html)
+        self.assertEqual(html_to_adf(html), doc)
+
+    def test_paragraph_cannot_hold_a_figure(self):
+        # Mirrors test_paragraph_cannot_hold_a_block_card (Task 7, Finding
+        # 3): a figure is a block, exactly like a table or a panel, and a
+        # <figure> written inside a <p> is silently accepted here and then
+        # either rejected by the API or mis-rendered - refused instead, the
+        # same as every other block wrongly nested inside a paragraph.
+        with self.assertRaises(ConversionError) as cm:
+            html_to_adf(f"<p>{self.FIGURE}</p>")
+        message = str(cm.exception)
+        self.assertIn("mediaSingle", message)
+        self.assertIn("paragraph", message)
+
+    def test_a_caption_cannot_hold_a_block(self):
+        # caption is an inline-content-only container, the same shape as
+        # heading/taskItem/decisionItem (FORBIDDEN_CHILDREN's None
+        # sentinel) - a block nested inside it is refused rather than
+        # silently accepted and then mangled on the next human edit.
+        with self.assertRaises(ConversionError) as cm:
+            html_to_adf(
+                '<figure data-type="media-single">'
+                '<div data-type="media" data-id="abc-123" '
+                'data-collection="contentId-999"></div>'
+                "<figcaption><p>no</p></figcaption></figure>"
+            )
+        self.assertIn("paragraph", str(cm.exception))
+        self.assertIn("caption", str(cm.exception))
+
+    def test_unclosed_media_div_is_rejected(self):
+        # Mirrors test_unclosed_opaque_node_raises_rather_than_silently_
+        # dropping_content (TestOpaqueHardening): <div data-type="media">
+        # is a leaf pushed onto _media_stack rather than builder.blocks, so
+        # an unclosed one is invisible to the "len(blocks) > 1" check on
+        # its own. Here the enclosing <figure> DOES close, which pops
+        # mediaSingle off builder.blocks and brings that check back to
+        # balanced (len 1) - so this exercises _media_stack's own guard
+        # specifically, not the pre-existing block-stack one: without it,
+        # the unclosed media div's "ignore text while it is open" state in
+        # handle_data would leak past the fragment's end with no error,
+        # silently swallowing every paragraph after the break.
+        fragment = (
+            "<p>Keep.</p>"
+            '<figure data-type="media-single">'
+            '<div data-type="media" data-id="abc-123" '
+            'data-collection="contentId-999">'
+            "</figure>"
+            "<p>This prose must survive.</p>"
+        )
+        with self.assertRaises(ConversionError) as cm:
+            html_to_adf(fragment)
+        self.assertIn("media", str(cm.exception))
 
 
 class TestAdfToMarkdown(unittest.TestCase):

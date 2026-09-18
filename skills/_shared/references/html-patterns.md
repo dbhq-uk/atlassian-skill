@@ -226,9 +226,9 @@ shell line.
 
 ## Images and attachments
 
-An image must be uploaded as a page attachment first; conversion does not
-upload files, and a local filesystem path will not resolve. Reference the
-returned media id and collection:
+An image must be uploaded as a page attachment first (`attachments.sh upload
+<page-id> <file>`); conversion does not upload files, and a local filesystem
+path will not resolve. Reference the returned media id and collection:
 
 ```html
 <figure data-type="media-single" data-layout="center" data-width="80">
@@ -238,8 +238,22 @@ returned media id and collection:
 </figure>
 ```
 
-`data-width` on the `<figure>` is a percentage: `80` for a diagram, `60` for a
-screenshot, `100` sparingly. Do not put width or height on the inner `<div>`.
+`data-width` on the `<figure>` is what the editor shows as the display width;
+leave `data-width-type` off to let Confluence pick a sensible pixel size on
+first save rather than trying to guess one. Both are round-tripped exactly as
+Confluence saved them, so an already-published figure's width and width-type
+survive an edit unchanged regardless of which the original author wrote -
+copy them through verbatim rather than recomputing either.
+
+Re-uploading a file with the same name replaces the attachment in place (no
+duplicate) but issues a new media id every time - splice the new id into any
+figure that used the old one; do not assume it stayed the same because the
+attachment did.
+
+The inner `<div>` also carries the image's own pixel `data-width`/
+`data-height` and a `data-local-id` on a page fetched back from Confluence.
+Both are round-trip bookkeeping, not something to invent when hand-authoring
+a new figure - leave them off and Confluence assigns its own.
 
 A PDF or zip is a media node, not an `<a href>`; a relative href does not
 become an attachment chip.
