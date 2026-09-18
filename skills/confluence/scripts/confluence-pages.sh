@@ -242,7 +242,11 @@ case "$CMD" in
         # page to lose, so it does not go through this gate.
         if ! ROUNDTRIP_ERROR=$(printf '%s' "$CURRENT_BODY" | python3 "$HTMLPLUS" check-roundtrip 2>&1 1>/dev/null); then
             echo "Error: page $PAGE_ID (\"$CURRENT_TITLE\") cannot be safely edited through this skill." >&2
-            echo "Cause: $ROUNDTRIP_ERROR" >&2
+            # htmlplus.py's main() already prefixes its own stderr with
+            # "Error: " - stripped here so this Cause: line reads like
+            # every other one in this file (a plain description), not a
+            # doubled "Cause: Error: ...".
+            echo "Cause: ${ROUNDTRIP_ERROR#Error: }" >&2
             echo "Fix: nothing was sent. This page carries something this converter cannot round-trip exactly - editing it here risks silently losing part of it that your change never touched." >&2
             exit 1
         fi

@@ -11,7 +11,7 @@ sys.path.insert(0, str(SCRIPTS))
 from htmlplus import ConversionError, html_to_adf  # noqa: E402
 from htmlplus import adf_to_html, adf_to_markdown  # noqa: E402
 from htmlplus import _opaque_to_html, _opaque_mark_to_html  # noqa: E402
-from htmlplus import check_roundtrip  # noqa: E402
+from htmlplus import check_roundtrip, _first_roundtrip_difference  # noqa: E402
 
 
 class TestDocumentEnvelope(unittest.TestCase):
@@ -1222,6 +1222,25 @@ class TestRoundtripGate(unittest.TestCase):
         ok, differing_type = check_roundtrip(doc)
         self.assertFalse(ok)
         self.assertEqual(differing_type, "subsup")
+
+    def test_a_content_or_marks_key_inside_attrs_cannot_manufacture_a_type(self):
+        # Minor (review round three). The Minor 1 fix above set is_node
+        # from a bare key-name match (key in ("content", "marks")), which
+        # closed the subsup case but left a second way in: a literal
+        # "content" or "marks" key sitting *inside* an "attrs" value
+        # re-armed is_node one level down, regardless of the fact that the
+        # walk was already inside attrs and had no business trusting a
+        # "type" there at all. This exact fixture, confirmed by the
+        # reviewer, used to return "leak-attempt" - the attacker-chosen
+        # value of a "type" key buried in attrs["content"][0] - instead of
+        # "node", the actual enclosing ADF node's real type. is_node must
+        # stay False for the rest of a subtree once it goes False, however
+        # the keys underneath happen to be spelled.
+        result = _first_roundtrip_difference(
+            {"type": "node", "attrs": {"content": [{"type": "leak-attempt", "x": 1}]}},
+            {"type": "node", "attrs": {"content": [{"type": "leak-attempt", "x": 2}]}},
+        )
+        self.assertEqual(result, "node")
 
     def test_clean_document_is_ok(self):
         doc = html_to_adf("<p><strong>Hi.</strong></p>")

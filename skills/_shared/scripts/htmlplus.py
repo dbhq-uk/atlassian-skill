@@ -1165,6 +1165,15 @@ def _first_roundtrip_difference(original, roundtripped):
     current dict was reached that way; it is only carried onward through a
     "content" or "marks" key, so a dict found via "attrs" (or anything
     else) never adopts its own "type" field, however it is spelled.
+
+    is_node is AND-ed with the key check, not just set from it: a second
+    review pass found that a bare key-name match let a literal "content" or
+    "marks" key sitting inside "attrs" re-arm is_node one level down, so a
+    node type manufactured inside an attrs value ({"attrs": {"content":
+    [{"type": "leak-attempt", ...}]}}) could still surface. Once is_node is
+    False - once the walk is inside a real node's attrs - nothing nested
+    under it is a real node either, however its keys happen to be spelled,
+    so False has to stay False for the rest of that subtree.
     """
     def walk(a, b, nearest_type, is_node=True):
         if isinstance(a, dict) and isinstance(b, dict):
@@ -1173,7 +1182,8 @@ def _first_roundtrip_difference(original, roundtripped):
             if set(a.keys()) != set(b.keys()):
                 return here
             for key in a:
-                diff = walk(a[key], b[key], here, is_node=key in ("content", "marks"))
+                diff = walk(a[key], b[key], here,
+                             is_node=(is_node and key in ("content", "marks")))
                 if diff is not None:
                     return diff
             return None
