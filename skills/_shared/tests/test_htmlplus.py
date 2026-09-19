@@ -744,6 +744,12 @@ ROUND_TRIP_CASES = [
     "<ol><li><p>one</p></li></ol>",
     '<table data-width="400"><tbody><tr>'
     '<td data-colwidth="400"><p>x</p></td></tr></tbody></table>',
+    # Independent review, MAJOR 5: an explicit data-number-column="false"
+    # used to render identically to the attribute being absent, so
+    # isNumberColumnEnabled: False silently became "unset" on the next
+    # pass rather than staying False.
+    '<table data-number-column="false"><tbody><tr>'
+    "<td><p>x</p></td></tr></tbody></table>",
     '<section data-type="layout-two-equal">'
     '<div data-type="column"><p>L</p></div>'
     '<div data-type="column"><p>R</p></div></section>',
@@ -1673,31 +1679,35 @@ class TestReverseCli(unittest.TestCase):
         self.assertEqual(r.stdout, "")
 
     def test_check_roundtrip_exits_1_naming_the_type_on_a_lossy_document(self):
-        # A known mark (subsup) carrying an attrs key this converter's
-        # named rendering does not use - dropped silently (only "type" is
-        # read back out), so the page round-trips to something different
-        # from what was fetched. orderedList's "order" was the fixture here
-        # until this task gave it a real data-* carry (the list's start
-        # number - see SIMPLE_BLOCKS handling in htmlplus.py), which closed
-        # the exact gap this test exists to demonstrate; subsup's own extra
-        # attrs is not something this task's node-level generalisation
-        # covers (marks that already have named per-type rendering, rather
-        # than the wholly-unrecognised-mark passthrough textColor and
-        # friends get, are out of its scope), so it keeps demonstrating a
-        # genuine refusal.
+        # orderedList's "order" was the fixture here until an earlier task
+        # gave it a real data-* carry (the list's start number - see
+        # SIMPLE_BLOCKS handling in htmlplus.py); a subsup mark carrying an
+        # attrs key its named rendering did not use was the fixture after
+        # that, until the independent review (MAJOR 5) generalised the
+        # same completeness check _fully_modelled already did for a node's
+        # own attrs to a node's marks too - link's dropped "title" was the
+        # reviewer's own repro, and subsup's "extraAttr" here was exactly
+        # the same shape of gap one level over, closed the same way.
+        #
+        # An expand with no "title" key at all is the next fixture: the
+        # named renderer always writes <summary></summary> (a.get("title",
+        # "")), so a fetched expand that happens to have no "title" key at
+        # all - as opposed to one present and empty - round-trips back in
+        # with the key now present, and check_roundtrip's Python value
+        # equality correctly tells {"attrs": {}} apart from {"attrs":
+        # {"title": ""}}.
         doc = {
             "type": "doc", "version": 1,
             "content": [
-                {"type": "paragraph", "content": [
-                    {"type": "text", "text": "H2O",
-                     "marks": [{"type": "subsup",
-                                "attrs": {"type": "sub", "extraAttr": "keep-me"}}]},
+                {"type": "expand", "attrs": {}, "content": [
+                    {"type": "paragraph", "content": [
+                        {"type": "text", "text": "x"}]},
                 ]},
             ],
         }
         r = self._run(["check-roundtrip"], json.dumps(doc))
         self.assertEqual(r.returncode, 1)
-        self.assertIn("subsup", r.stderr)
+        self.assertIn("expand", r.stderr)
         self.assertTrue(r.stderr.startswith("Error:"))
 
     def test_to_html_on_a_null_body_gives_one_line_not_a_traceback(self):
@@ -1725,26 +1735,38 @@ class TestRoundtripGate(unittest.TestCase):
         # adopt a["type"] at any depth, including inside "attrs" - and a
         # subsup mark's own attrs is {"type": "sub"} or {"type": "sup"},
         # an attribute value that happens to share the key name "type"
-        # with the thing this function is meant to report. The refusal
-        # message promises to carry no page content, but "sub"/"sup" here
-        # was never a node type at all - it is this mark's own attrs
-        # value. The extra "extraAttr" is not carried by
-        # adf_to_html's subsup rendering (only the tag name is), so this
-        # mark genuinely fails to round-trip; the type reported for that
-        # failure must be "subsup" (the mark's real ADF type), not "sub".
+        # with the thing this function is meant to report. The original
+        # fixture here made the subsup mark itself the lossy part (an
+        # "extraAttr" its named rendering did not carry) - the independent
+        # review (MAJOR 5) closed that gap by generalising the same
+        # attrs-completeness check to a mark's own attrs, so it no longer
+        # demonstrates a real refusal on its own.
+        #
+        # The property under test survives that fix intact: a "type" key
+        # sitting inside some *other* node's attrs must never leak as the
+        # reported type. So the subsup mark - still carrying attrs = {
+        # "type": "sub"} - stays in this fixture as exactly that
+        # temptation, nested two levels inside an expand that is the
+        # actual, still-genuine source of the mismatch (no "title" key at
+        # all - see the class docstring's sibling tests for why that
+        # round-trips differently). The walk finds the expand's own attrs
+        # differ before it ever reaches the subsup mark buried in its
+        # content, so "expand" is correct and "sub" would be exactly the
+        # bug this test exists to catch.
         doc = {
             "type": "doc", "version": 1,
             "content": [
-                {"type": "paragraph", "content": [
-                    {"type": "text", "text": "H2O",
-                     "marks": [{"type": "subsup",
-                                "attrs": {"type": "sub", "extraAttr": "keep-me"}}]},
+                {"type": "expand", "attrs": {}, "content": [
+                    {"type": "paragraph", "content": [
+                        {"type": "text", "text": "H2O",
+                         "marks": [{"type": "subsup", "attrs": {"type": "sub"}}]},
+                    ]},
                 ]},
             ],
         }
         ok, differing_type = check_roundtrip(doc)
         self.assertFalse(ok)
-        self.assertEqual(differing_type, "subsup")
+        self.assertEqual(differing_type, "expand")
 
     def test_a_content_or_marks_key_inside_attrs_cannot_manufacture_a_type(self):
         # Minor (review round three). The Minor 1 fix above set is_node
@@ -1774,21 +1796,22 @@ class TestRoundtripGate(unittest.TestCase):
     def test_lossy_known_type_is_not_ok_and_names_its_type(self):
         # Same fixture and same reasoning as TestReverseCli's version of
         # this test, above: orderedList's "order" attr used to be exactly
-        # this class's example and no longer is, now that this task gave it
-        # a real data-* carry.
+        # this class's example, then a subsup mark's own extra attrs, until
+        # the independent review (MAJOR 5) closed that gap too - see
+        # test_differing_type_is_a_real_node_type_not_an_attrs_value just
+        # above for the fixture this class now shares.
         doc = {
             "type": "doc", "version": 1,
             "content": [
-                {"type": "paragraph", "content": [
-                    {"type": "text", "text": "H2O",
-                     "marks": [{"type": "subsup",
-                                "attrs": {"type": "sub", "extraAttr": "keep-me"}}]},
+                {"type": "expand", "attrs": {}, "content": [
+                    {"type": "paragraph", "content": [
+                        {"type": "text", "text": "x"}]},
                 ]},
             ],
         }
         ok, differing_type = check_roundtrip(doc)
         self.assertFalse(ok)
-        self.assertEqual(differing_type, "subsup")
+        self.assertEqual(differing_type, "expand")
 
     def test_opaque_passthrough_content_is_ok(self):
         # The gate must not flag passthrough content as unsafe - that is
@@ -2632,6 +2655,116 @@ class TestUniversalOpaqueFallback(unittest.TestCase):
         ok, differing_type = check_roundtrip(doc)
         self.assertTrue(ok, differing_type)
         self.assertIn('data-type="adf-opaque"', adf_to_html(doc))
+
+
+class TestMajor5NamedRenderingFallback(unittest.TestCase):
+    """Independent review, MAJOR 5: "named rendering is never worse than
+    opaque passthrough" had three confirmed counterexamples - a link mark's
+    "title" dropped silently, a table's explicit isNumberColumnEnabled:
+    false rendering identically to the key being absent, and alt text
+    containing a quotation mark producing malformed HTML. All three used
+    to fail check_roundtrip rather than degrade to opaque; the third was
+    called out as a correctness bug in its own right, not just a fidelity
+    gap, since the broken HTML did not depend on ever writing the page
+    back.
+    """
+
+    def test_a_link_mark_with_a_title_falls_back_to_opaque_not_a_silent_drop(self):
+        doc = {
+            "type": "doc", "version": 1,
+            "content": [
+                {"type": "paragraph", "content": [
+                    {"type": "text", "text": "docs",
+                     "marks": [{"type": "link",
+                                "attrs": {"href": "https://example.com",
+                                          "title": "Read the docs"}}]},
+                ]},
+            ],
+        }
+        ok, differing_type = check_roundtrip(doc)
+        self.assertTrue(ok, differing_type)
+        self.assertIn('data-type="adf-opaque-mark"', adf_to_html(doc))
+
+    def test_an_ordinary_link_with_no_title_still_renders_named(self):
+        # The fallback above must not swallow the common case - href alone
+        # is exactly what this mark's named rendering already models.
+        doc = html_to_adf(
+            '<p><a href="https://example.com">docs</a></p>'
+        )
+        html = adf_to_html(doc)
+        self.assertIn('<a href="https://example.com">', html)
+        self.assertNotIn("adf-opaque", html)
+
+    def test_table_isnumbercolumnenabled_false_round_trips_as_false_not_absent(self):
+        doc = {
+            "type": "doc", "version": 1,
+            "content": [
+                {"type": "table", "attrs": {"isNumberColumnEnabled": False},
+                 "content": [
+                     {"type": "tableRow", "content": [
+                         # tableCell always carries an "attrs" key, even
+                         # empty - the html_to_adf side sets it
+                         # unconditionally, unlike table's own attrs, which
+                         # is omitted when empty (TestTableAttrsOmission).
+                         # Present-but-empty and absent are different ADF,
+                         # so the fixture has to match what this parser
+                         # actually produces or the round trip differs on
+                         # that instead of the property under test.
+                         {"type": "tableCell", "attrs": {}, "content": [
+                             {"type": "paragraph",
+                              "content": [{"type": "text", "text": "x"}]},
+                         ]},
+                     ]},
+                 ]},
+            ],
+        }
+        ok, differing_type = check_roundtrip(doc)
+        self.assertTrue(ok, differing_type)
+        self.assertIn('data-number-column="false"', adf_to_html(doc))
+
+    def test_alt_text_containing_a_quotation_mark_does_not_break_the_html_attribute(self):
+        # The reviewer's own repro. This is checked at the HTML level, not
+        # just round-trip equality - a malformed attribute is a
+        # correctness bug even if it happened to still parse back the same
+        # way by accident.
+        doc = {
+            "type": "doc", "version": 1,
+            "content": [
+                {"type": "mediaSingle", "attrs": {"layout": "center"},
+                 "content": [
+                     {"type": "media",
+                      "attrs": {"type": "file", "id": "abc", "collection": "c1",
+                                "alt": 'a "wide" shot'}},
+                 ]},
+            ],
+        }
+        html = adf_to_html(doc)
+        self.assertIn('data-alt="a &quot;wide&quot; shot"', html)
+        # And it still converts straight back - the property a malformed
+        # attribute would have broken.
+        ok, differing_type = check_roundtrip(doc)
+        self.assertTrue(ok, differing_type)
+
+    def test_a_subsup_type_outside_sub_or_sup_falls_back_to_opaque(self):
+        # Not one of the reviewer's three - found applying the same fix
+        # generally. "type" here becomes an HTML tag name, not an
+        # attribute value, so an unexpected one is a bigger risk than a
+        # quoting problem: this must never reach adf_to_html's output as a
+        # literal <script> or similar.
+        doc = {
+            "type": "doc", "version": 1,
+            "content": [
+                {"type": "paragraph", "content": [
+                    {"type": "text", "text": "x",
+                     "marks": [{"type": "subsup", "attrs": {"type": "script"}}]},
+                ]},
+            ],
+        }
+        html = adf_to_html(doc)
+        self.assertNotIn("<script", html)
+        self.assertIn('data-type="adf-opaque-mark"', html)
+        ok, differing_type = check_roundtrip(doc)
+        self.assertTrue(ok, differing_type)
 
 
 if __name__ == "__main__":

@@ -955,8 +955,16 @@ class _Builder(HTMLParser):
                 attrs_out["width"] = _parse_float(a["data-width"], "data-width")
             if "data-layout" in a:
                 attrs_out["layout"] = a["data-layout"]
+            # Independent review, MAJOR 5: an explicit false needs its own
+            # branch, not just "anything except true is unset" - the
+            # reverse direction now writes data-number-column="false"
+            # rather than omitting the attribute, and this is what reads
+            # that back as isNumberColumnEnabled: False rather than as the
+            # key being absent (see _node_to_html's table branch).
             if a.get("data-number-column") == "true":
                 attrs_out["isNumberColumnEnabled"] = True
+            elif a.get("data-number-column") == "false":
+                attrs_out["isNumberColumnEnabled"] = False
             if a.get("data-display-mode"):
                 attrs_out["displayMode"] = a["data-display-mode"]
             _set_local_id(attrs_out, a)
@@ -1378,6 +1386,27 @@ def html_to_adf(fragment):
 
 _MARK_TAGS = {"strong": "strong", "em": "em", "code": "code",
               "strike": "s", "underline": "u"}
+# The attrs keys each mark's named renderer actually represents. Read two
+# ways: _inline_to_html's marks loop uses it directly, the same way
+# _NODE_ATTRS_MARKS gates a whole node - a mark type with no entry here is
+# unconditionally opaque, one with an entry but an attrs key outside it
+# degrades the same way, rather than rendering named and silently dropping
+# whatever it cannot carry (the gap that dropped a link mark's "title").
+# _fully_modelled, below, also reads it for a NODE's own marks (paragraph's
+# alignment/indentation, codeBlock/expand/layoutSection's breakout) - those
+# used to be checked by type membership alone, which is exactly the same
+# gap one level up: a breakout mark carrying an attrs key beyond mode/width
+# would still pass as "a known mark" and then silently lose whatever
+# _node_marks_html does not itself extract.
+_MARK_ATTRS = {
+    "strong": frozenset(), "em": frozenset(), "code": frozenset(),
+    "strike": frozenset(), "underline": frozenset(),
+    "subsup": {"type"},
+    "link": {"href"},
+    "alignment": {"align"},
+    "indentation": {"level"},
+    "breakout": {"mode", "width"},
+}
 _PANEL_LABELS = {"info": "Info", "note": "Note", "success": "Success",
                  "warning": "Warning", "error": "Error"}
 _LAYOUT_BY_COUNT = {1: "layout-section", 2: "layout-two-equal",
@@ -1438,12 +1467,29 @@ def _fully_modelled(node, known_attrs, known_marks=frozenset()):
     future ADF revision's - degrades to the opaque blob a wholly
     unrecognised type already gets, never a silent, partial drop. See
     _NODE_ATTRS_MARKS and _INLINE_ATTRS_MARKS, its two callers.
+
+    known_marks used to be checked by type membership alone - is this mark
+    type one this node's renderer knows about at all - which is exactly the
+    same incompleteness one level up: it says nothing about whether the
+    mark's OWN attrs are fully represented. A breakout mark carrying an
+    attrs key beyond mode/width would pass as "a known mark" and then
+    silently lose whatever _node_marks_html does not itself extract - the
+    same gap this function exists to close for a node's own attrs, just
+    one level deeper. So a mark that passes the type check is then checked
+    again, recursively, against _MARK_ATTRS - the same table
+    _inline_to_html's marks loop uses for a run of text's marks, since a
+    node-level mark (breakout, alignment, indentation) and an inline-text
+    mark (link, strong, subsup, ...) share the identical shape: a type and
+    an attrs dict, nothing else.
     """
     a = node.get("attrs", {})
     if not set(a) <= known_attrs:
         return False
     for mark in node.get("marks") or ():
-        if mark.get("type") not in known_marks:
+        mt = mark.get("type")
+        if mt not in known_marks:
+            return False
+        if not _fully_modelled(mark, _MARK_ATTRS.get(mt, frozenset())):
             return False
     return True
 
@@ -1505,6 +1551,29 @@ _INLINE_ATTRS_MARKS = {
 def _escape(text):
     return (text.replace("&", "&amp;").replace("<", "&lt;")
                 .replace(">", "&gt;"))
+
+
+def _escape_attr(text):
+    """Escape a value for use inside a double-quoted HTML attribute.
+
+    _escape, above, is for text NODE content, where a literal " is inert -
+    only &, < and > mean anything there. Inside a *quoted attribute value*
+    a literal " is exactly the character that ends the attribute early and
+    turns whatever follows into new markup: alt text reading `a "wide" shot`
+    used to produce `data-alt="a "wide" shot"` - the attribute closes after
+    `a `, and `wide" shot"` is now stray, malformed markup, not a fidelity
+    gap. Every attribute value in this file that carries free-form
+    string data from ADF (read from a live page, so never something this
+    converter controls) goes through this rather than straight
+    interpolation - a number from _format_number(), an internal fixed
+    constant such as ADF_OPAQUE, or a base64 blob from _encode_adf() never
+    needs it, since none of those can carry a literal quote.
+
+    Order matters: & is replaced first, or escaping the other three would
+    double-escape the & inside each of their own entities.
+    """
+    return (text.replace("&", "&amp;").replace("<", "&lt;")
+                .replace(">", "&gt;").replace('"', "&quot;"))
 
 
 def _timestamp_to_iso(ms):
@@ -1590,7 +1659,7 @@ def _local_id_attr(a):
         return ""
     if a["localId"] is None:
         return " data-local-id-null"
-    return f' data-local-id="{a["localId"]}"'
+    return f' data-local-id="{_escape_attr(a["localId"])}"'
 
 
 def _inline_to_html(node):
@@ -1606,22 +1675,39 @@ def _inline_to_html(node):
         # rebuilds the original nesting.
         for mark in reversed(node.get("marks", [])):
             mt = mark["type"]
-            if mt == "link":
-                out = f'<a href="{mark["attrs"]["href"]}">{out}</a>'
+            known_attrs = _MARK_ATTRS.get(mt)
+            # Independent review, MAJOR 5: a link mark carrying a "title"
+            # (a real, schema-legal ADF attribute this converter has no
+            # HTML+ form for) used to render named regardless, silently
+            # dropping it - the same shape of bug _fully_modelled already
+            # closed for whole nodes, just never applied to a mark's own
+            # attrs. known_attrs is None for a mark type with no entry
+            # below at all (unrecognised); not _fully_modelled(...) is a
+            # known type carrying an attrs key this branch cannot
+            # represent. Either way, opaque, same as the pre-existing
+            # "unrecognised mark" branch already did - never a silent,
+            # partial drop.
+            if known_attrs is None or not _fully_modelled(mark, known_attrs):
+                out = _opaque_mark_to_html(mark, out)
+            elif mt == "link":
+                out = f'<a href="{_escape_attr(mark["attrs"]["href"])}">{out}</a>'
             elif mt == "subsup":
                 tag = mark["attrs"]["type"]
-                out = f"<{tag}>{out}</{tag}>"
-            elif mt in _MARK_TAGS:
-                tag = _MARK_TAGS[mt]
-                out = f"<{tag}>{out}</{tag}>"
+                # "type" is a free string on a mark read back from a live
+                # page, not something this converter itself constrained on
+                # the way in - and it is about to become an HTML tag name,
+                # not an attribute value, so escaping would not help here:
+                # an unexpected value needs refusing to use as a tag at
+                # all, not a quoting fix. ADF's own schema allows only
+                # "sub" or "sup"; anything else degrades to the opaque
+                # passthrough every other unmodelled shape gets, rather
+                # than ever being written out as <script> or similar.
+                if tag not in ("sub", "sup"):
+                    out = _opaque_mark_to_html(mark, out)
+                else:
+                    out = f"<{tag}>{out}</{tag}>"
             else:
-                # An unrecognised mark - textColor, alignment, breakout and
-                # more, measured against a live site. Previously
-                # silently dropped here: none of the branches above matched,
-                # so the mark simply never got applied and the run of text
-                # lost its formatting on every fetch, with no warning. Now
-                # wrapped instead, the same as a known mark, just opaquely.
-                out = _opaque_mark_to_html(mark, out)
+                out = f"<{_MARK_TAGS[mt]}>{out}</{_MARK_TAGS[mt]}>"
         return out
     known = _INLINE_ATTRS_MARKS.get(t)
     if known is not None and not _fully_modelled(node, *known):
@@ -1629,7 +1715,7 @@ def _inline_to_html(node):
     if t == "status":
         a = node["attrs"]
         local_id = _local_id_attr(a)
-        return (f'<span data-type="status" data-color="{a["color"]}"{local_id}>'
+        return (f'<span data-type="status" data-color="{_escape_attr(a["color"])}"{local_id}>'
                 f'{_escape(a["text"])}</span>')
     if t == "date":
         a = node["attrs"]
@@ -1639,7 +1725,7 @@ def _inline_to_html(node):
     if t == "inlineCard":
         a = node["attrs"]
         local_id = _local_id_attr(a)
-        return f'<a href="{a["url"]}" data-card-appearance="inline"{local_id}></a>'
+        return f'<a href="{_escape_attr(a["url"])}" data-card-appearance="inline"{local_id}></a>'
     if t == "hardBreak":
         return "<br>"
     # Reached for any inline ADF node type this converter does not know how
@@ -1674,7 +1760,7 @@ def _node_marks_html(node):
     marks = node.get("marks") or []
     for mark in marks:
         if mark["type"] == "breakout":
-            bits = [f'data-breakout-mode="{mark["attrs"]["mode"]}"']
+            bits = [f'data-breakout-mode="{_escape_attr(mark["attrs"]["mode"])}"']
             if "width" in mark["attrs"]:
                 bits.append(
                     f'data-breakout-width="{_format_number(mark["attrs"]["width"])}"'
@@ -1694,7 +1780,7 @@ def _node_to_html(node):
         align = indent = ""
         for mark in node.get("marks") or []:
             if mark["type"] == "alignment":
-                align = f' data-align="{mark["attrs"]["align"]}"'
+                align = f' data-align="{_escape_attr(mark["attrs"]["align"])}"'
             elif mark["type"] == "indentation":
                 indent = f' data-indent-level="{_format_number(mark["attrs"]["level"])}"'
         return f"<p{local_id}{align}{indent}>{_inline_html(node)}</p>"
@@ -1708,15 +1794,15 @@ def _node_to_html(node):
         if local_id_bit:
             bits.append(local_id_bit)
         if "panelIconId" in a:
-            bits.append(f'data-panel-icon-id="{a["panelIconId"]}"')
+            bits.append(f'data-panel-icon-id="{_escape_attr(a["panelIconId"])}"')
         if "panelIcon" in a:
-            bits.append(f'data-panel-icon="{a["panelIcon"]}"')
+            bits.append(f'data-panel-icon="{_escape_attr(a["panelIcon"])}"')
         if "panelIconText" in a:
-            bits.append(f'data-panel-icon-text="{a["panelIconText"]}"')
+            bits.append(f'data-panel-icon-text="{_escape_attr(a["panelIconText"])}"')
         if "panelColor" in a:
-            bits.append(f'data-panel-color="{a["panelColor"]}"')
+            bits.append(f'data-panel-color="{_escape_attr(a["panelColor"])}"')
         extra = "" if not bits else " " + " ".join(bits)
-        return (f'<div data-type="panel-{a["panelType"]}"{extra}>'
+        return (f'<div data-type="panel-{_escape_attr(a["panelType"])}"{extra}>'
                 f"{_children_html(node)}</div>")
     if t == "expand":
         local_id = _local_id_attr(a)
@@ -1762,7 +1848,8 @@ def _node_to_html(node):
                 f"{_children_html(node)}</ul>")
     if t == "decisionItem":
         local_id = _local_id_attr(a)
-        return (f'<li data-type="decision-item" data-state="{a.get("state", "DECIDED")}"'
+        state = _escape_attr(a.get("state", "DECIDED"))
+        return (f'<li data-type="decision-item" data-state="{state}"'
                 f"{local_id}>"
                 f"{_inline_html(node)}</li>")
     if t == "bulletList":
@@ -1789,11 +1876,21 @@ def _node_to_html(node):
         if "width" in a:
             bits.append(f'data-width="{_format_number(a["width"])}"')
         if "layout" in a:
-            bits.append(f'data-layout="{a["layout"]}"')
-        if a.get("isNumberColumnEnabled"):
-            bits.append('data-number-column="true"')
+            bits.append(f'data-layout="{_escape_attr(a["layout"])}"')
+        # Independent review, MAJOR 5: this used to be `if
+        # a.get("isNumberColumnEnabled"):`, which only ever wrote the
+        # attribute for a truthy value - an explicit False rendered
+        # identically to the key being absent altogether, so a table read
+        # back in lost isNumberColumnEnabled: false specifically (True
+        # round-tripped fine; the key already being modelled meant this
+        # never took the opaque fallback either, so the loss was silent
+        # rather than a refusal). "in a", not .get(): False and missing
+        # are different ADF, and only that distinguishes them.
+        if "isNumberColumnEnabled" in a:
+            value = "true" if a["isNumberColumnEnabled"] else "false"
+            bits.append(f'data-number-column="{value}"')
         if "displayMode" in a:
-            bits.append(f'data-display-mode="{a["displayMode"]}"')
+            bits.append(f'data-display-mode="{_escape_attr(a["displayMode"])}"')
         local_id_bit = _local_id_attr(a).strip()
         if local_id_bit:
             bits.append(local_id_bit)
@@ -1831,7 +1928,7 @@ def _node_to_html(node):
             if key in a:
                 bits.append(f'{key}="{_format_number(a[key])}"')
         if "background" in a:
-            bits.append(f'data-background="{a["background"]}"')
+            bits.append(f'data-background="{_escape_attr(a["background"])}"')
         local_id_bit = _local_id_attr(a).strip()
         if local_id_bit:
             bits.append(local_id_bit)
@@ -1853,13 +1950,13 @@ def _node_to_html(node):
     if t in ("blockCard", "embedCard"):
         appearance = "block" if t == "blockCard" else "embed"
         local_id = _local_id_attr(a)
-        return f'<a href="{a["url"]}" data-card-appearance="{appearance}"{local_id}></a>'
+        return f'<a href="{_escape_attr(a["url"])}" data-card-appearance="{appearance}"{local_id}></a>'
     if t == "mediaSingle":
-        bits = [f'data-layout="{a.get("layout", "center")}"']
+        bits = [f'data-layout="{_escape_attr(a.get("layout", "center"))}"']
         if "width" in a:
             bits.append(f'data-width="{_format_number(a["width"])}"')
         if "widthType" in a:
-            bits.append(f'data-width-type="{a["widthType"]}"')
+            bits.append(f'data-width-type="{_escape_attr(a["widthType"])}"')
         return (f'<figure data-type="media-single" {" ".join(bits)}>'
                 f"{_children_html(node)}</figure>")
     if t == "media" and a.get("type", "file") == "file" \
@@ -1876,10 +1973,20 @@ def _node_to_html(node):
         # simply is not there. A media node of any other shape (external
         # type with no id/collection) falls through to the opaque branch at
         # the end of this function instead - never a KeyError on a["id"].
-        bits = [f'data-media-type="{a.get("type", "file")}"',
-                f'data-id="{a["id"]}"', f'data-collection="{a["collection"]}"']
+        bits = [f'data-media-type="{_escape_attr(a.get("type", "file"))}"',
+                f'data-id="{_escape_attr(a["id"])}"',
+                f'data-collection="{_escape_attr(a["collection"])}"']
         if "alt" in a:
-            bits.append(f'data-alt="{a["alt"]}"')
+            # Independent review, MAJOR 5: the reviewer's own repro - alt
+            # text containing a quotation mark produced a malformed
+            # attribute (the value closed early, and whatever followed the
+            # quote became stray markup rather than part of the alt text).
+            # Called out as a correctness bug, not just a fidelity one: an
+            # unmodelled attrs key degrading to opaque would not have
+            # caught this, because "alt" IS a modelled key here
+            # (_MEDIA_ATTRS) - the gap was this f-string never escaping the
+            # value it carries, not a missing fallback.
+            bits.append(f'data-alt="{_escape_attr(a["alt"])}"')
         if "width" in a:
             bits.append(f'data-width="{_format_number(a["width"])}"')
         if "height" in a:
