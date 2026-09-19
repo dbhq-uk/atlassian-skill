@@ -101,13 +101,13 @@ does not appear in `ps` output or in shell history.
 
 Confluence Cloud v2 accepts exactly two body representations: `storage` XHTML
 and `atlas_doc_format`. Markdown was never one, and `wiki` was dropped. So
-every published Confluence skill sits on top of the Atlassian MCP server,
-which accepts a friendlier HTML dialect and converts it for you.
+every Confluence skill we've seen published sits on top of the Atlassian MCP
+server, which accepts a friendlier HTML dialect and converts it for you.
 
 `htmlplus.py` here does that conversion locally. You author in Confluence
-HTML+ - panels, status lozenges, task lists, decision lists, expands, page
-properties, column widths - and it emits the ADF the REST API takes. No MCP
-server, no vendor CLI, no network round trip to convert anything.
+HTML+ - panels, status lozenges, task lists, decision lists, expands, layouts,
+column widths - and it emits the ADF the REST API takes. No MCP server, no
+vendor CLI, no network round trip to convert anything.
 
 It also validates, rejecting invalid nesting before anything is sent, naming
 the element:
