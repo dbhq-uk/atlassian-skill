@@ -130,12 +130,15 @@ code block and real checkboxes, rather than a wall of plain text.
 ## A known limit: the round-trip gate
 
 `confluence update` and `confluence-publish` both refuse to overwrite a page
-whose current content this converter cannot read back unchanged (value
-equality on the parsed ADF, not a byte-identical comparison) -
-`UPDATE REPLACES THE WHOLE BODY`, so writing over content like
-that would silently drop whatever does not survive the round trip, not only
-the part you meant to change. **A live-site measurement once found this
-refusing roughly 60% of a 289-page sample** - almost always an ordinary
+whose current content this converter cannot read back unchanged - value
+equality on the parsed ADF, not a byte-identical comparison.
+
+`UPDATE REPLACES THE WHOLE BODY`, so writing over content like that would
+silently drop whatever does not survive the round trip, not only the part you
+meant to change.
+
+**A live-site measurement once found this refusing roughly 60% of a 289-page
+sample** - almost always an ordinary
 node's own attribute or mark (a local id, a colspanned cell's per-column
 widths, a list's start number, the editor's "make this wide" toggle) rather
 than an exotic node type. Generalising the carry-through-or-opaque-passthrough
@@ -259,11 +262,14 @@ confluence:
 ```
 
 `page_id` is written back on the first publish - **commit that change**, or
-the next run creates a second page instead of updating the first. Headings,
-paragraphs, lists, tables, links, inline marks and fenced code blocks convert
-cleanly, and GFM task lists (`- [ ]`) become real Confluence task lists. A
-panel, a status lozenge, a decision list, a layout and a column width have no
-markdown syntax at all - write them as raw HTML+ inline, which markdown
+the next run creates a second page instead of updating the first.
+
+Headings, paragraphs, lists, tables, links, inline marks and fenced code
+blocks convert cleanly, and GFM task lists (`- [ ]`) become real Confluence
+task lists.
+
+A panel, a status lozenge, a decision list, a layout and a column width have
+no markdown syntax at all - write them as raw HTML+ inline, which markdown
 permits and this skill passes through untouched.
 
 **Nested markdown lists are refused, not mangled.** `- one` with a
