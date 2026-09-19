@@ -66,8 +66,10 @@ whole skill directory is symlinked untouched, while Codex does not, so its
 
 ### Requirements
 
-`jq`, `curl`, Python 3 (standard library only - nothing to install), and an
-Atlassian Cloud account you can create an API token on.
+`jq`, `curl`, `column` (the discovery commands' table output - `bsdextrautils`
+on Debian/Ubuntu, `util-linux` elsewhere; not guaranteed present), Python 3
+(standard library only - nothing to install), and an Atlassian Cloud account
+you can create an API token on.
 
 
 ## Setup

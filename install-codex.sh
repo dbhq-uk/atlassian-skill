@@ -17,13 +17,17 @@ echo "=== atlassian installer (Codex) ==="
 echo
 
 # --- Dependencies ---
-# A warning, not a failure: a missing tool blocks a call to Jira, not the install.
+# A warning, not a failure: a missing tool blocks calling Jira or Confluence
+# (jq, curl), or breaks the discovery commands' table output (column), not
+# the install itself. column ships as part of bsdextrautils on Debian/Ubuntu
+# and util-linux elsewhere - not guaranteed present on every distribution.
 MISSING=""
-command -v jq >/dev/null 2>&1   || MISSING="$MISSING jq"
-command -v curl >/dev/null 2>&1 || MISSING="$MISSING curl"
+command -v jq >/dev/null 2>&1     || MISSING="$MISSING jq"
+command -v curl >/dev/null 2>&1   || MISSING="$MISSING curl"
+command -v column >/dev/null 2>&1 || MISSING="$MISSING column"
 if [ -n "$MISSING" ]; then
   echo "Missing:$MISSING"
-  echo "The skill installs anyway, but it cannot call Jira until they are there."
+  echo "The skill installs anyway, but a missing tool above will fail the commands that need it."
 else
   echo "Dependencies OK."
 fi

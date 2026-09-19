@@ -12,7 +12,7 @@ This skill **creates and reads only**. It has no delete, no bulk transition, and
 ## Prerequisites
 
 - Credentials in `~/.dbhq/atlassian/config.json` - shared with `confluence`; run setup if absent
-- `jq` and `curl`
+- `jq`, `curl` and `column` (the last for `jira-meta.sh` and `search`/`mine`'s table output - `bsdextrautils` on Debian/Ubuntu, `util-linux` elsewhere; not guaranteed present)
 
 ## Setup
 
