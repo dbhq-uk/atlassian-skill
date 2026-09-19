@@ -438,6 +438,98 @@ class TestMarkdownToHtmlPlus(unittest.TestCase):
             out, "<p>Some intro text.   still the same paragraph.</p>"
         )
 
+    # -- Independent review, MAJOR 6
+
+    def test_a_bare_pipe_line_that_is_not_a_table_does_not_hang(self):
+        # The reviewer's own repro: a line starting with "|" that does not
+        # open a real table (no separator row follows) used to loop
+        # forever without advancing - the table branch's own check
+        # required a separator row, but the paragraph loop's stop
+        # condition only checked "starts with |", so this line failed both
+        # and made zero progress either way. Bounded by the test runner's
+        # own timeout rather than an explicit one here - if this ever
+        # regresses, the whole suite hangs rather than this test failing
+        # cleanly, which is a worse outcome deliberately avoided by fixing
+        # the loop rather than only detecting it.
+        out = md_to_htmlplus("| not a real table\nmore text on the next line\n")
+        self.assertEqual(out, "<p>| not a real table more text on the next line</p>")
+
+    def test_a_bare_pipe_line_at_the_end_of_input_does_not_hang(self):
+        # The same shape with nothing following it at all - i + 1 <
+        # len(lines) is false, so _looks_like_table_start never even reads
+        # lines[i + 1].
+        out = md_to_htmlplus("Some text.\n|\n")
+        self.assertEqual(out, "<p>Some text. |</p>")
+
+    def test_inline_code_containing_literal_asterisks_is_not_reprocessed(self):
+        # Finding: **literal** typed inside a code span used to lose its
+        # backticks' protection - the bold pattern re-scanned the whole
+        # string after the code substitution ran, including the <code>
+        # tag's own freshly-inserted content, and picked it up as if it
+        # were real bold markup.
+        out = md_to_htmlplus("Use `**bold**` literally in code.\n")
+        self.assertEqual(
+            out, "<p>Use <code>**bold**</code> literally in code.</p>"
+        )
+
+    def test_a_literal_html_tag_typed_as_prose_is_not_live_html(self):
+        # Found applying the same fix, not one of the reviewer's named
+        # bullets: the dead "un-escape the tags the substitutions just
+        # produced" step this replaced did a blanket string replace of
+        # &lt;strong&gt; -> <strong> across the WHOLE output, with no way
+        # to tell "produced by the bold pattern just now" apart from
+        # "typed by the author as literal prose" - so documentation that
+        # mentions the tag name <strong> by name silently became live
+        # formatting instead of the visible tag name it was meant to be.
+        out = md_to_htmlplus(
+            "Type <strong>literally</strong> to mean the word, not markup.\n"
+        )
+        self.assertEqual(
+            out,
+            "<p>Type &lt;strong&gt;literally&lt;/strong&gt; to mean the "
+            "word, not markup.</p>",
+        )
+
+    def test_a_cpp_fence_is_recognised(self):
+        # \w* refused this outright - + is not a word character - so the
+        # whole fence fell through to the paragraph catch-all instead of
+        # opening a code block.
+        out = md_to_htmlplus("```c++\nint x = 1;\n```\n")
+        self.assertEqual(out, '<pre><code class="language-c++">int x = 1;</code></pre>')
+
+    def test_a_relative_link_is_refused_not_published_dead(self):
+        with self.assertRaises(ConversionError) as ctx:
+            md_to_htmlplus("See the [guide](guide.md#heading).\n")
+        self.assertIn("guide.md#heading", str(ctx.exception))
+
+    def test_an_in_page_anchor_link_still_works(self):
+        # Not a relative link to another file - a same-page anchor, which
+        # this converter cannot resolve any better than a relative path,
+        # but does not need to: the fragment alone is already correct
+        # wherever this page ends up.
+        out = md_to_htmlplus("See [above](#introduction).\n")
+        self.assertEqual(out, '<p>See <a href="#introduction">above</a>.</p>')
+
+    def test_a_mailto_link_still_works(self):
+        # Absolute by RFC 3986's scheme grammar even though it carries no
+        # "//" - confirms the check is not accidentally requiring one.
+        out = md_to_htmlplus("Email [support](mailto:help@example.com).\n")
+        self.assertEqual(
+            out,
+            '<p>Email <a href="mailto:help@example.com">support</a>.</p>',
+        )
+
+    def test_a_quote_in_a_link_href_does_not_break_the_html_attribute(self):
+        # href is the LINK regex's own [^)]+ group, so a literal ) in the
+        # target would end the capture early regardless of this fix -
+        # tested here with a plain quote instead, the shape that actually
+        # reaches _link with the attribute-breakout risk intact.
+        out = md_to_htmlplus('[x](https://example.com/"widget)\n')
+        self.assertEqual(
+            out,
+            '<p><a href="https://example.com/&quot;widget">x</a></p>',
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

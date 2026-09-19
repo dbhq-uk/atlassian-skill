@@ -61,7 +61,7 @@ If the converter refused the round trip, there is no --force: resolve it directl
 
 Headings, paragraphs, lists, tables, links, inline marks and fenced code blocks convert cleanly. **GFM task lists (`- [ ]`) become real Confluence task lists**, which Confluence indexes and reports on.
 
-A panel, a status lozenge, a decision list, a layout and a column width have **no markdown syntax at all**. Write them as raw HTML+ inline in the source file, which markdown permits and this skill passes through untouched:
+A panel, a status lozenge, a decision list, a layout and a column width have **no markdown syntax at all**. Write them as raw HTML+ on its own line in the source file, which markdown permits and this skill passes through untouched:
 
 ```markdown
 Ordinary prose in markdown.
@@ -70,6 +70,12 @@ Ordinary prose in markdown.
 
 More prose.
 ```
+
+**On its own line, not mid-sentence.** The same markup embedded inside running prose - `assignee is <span data-type="status" ...>unset</span> today` - is not detected as a tag and is escaped to inert, visible text instead of passed through as live HTML+. This converter cannot yet tell a real inline tag apart from a stray `<` a human never meant as markup, and guessing wrong there mis-renders prose silently - exactly the failure this whole converter exists to avoid. Give an inline component its own line, even a short one.
+
+A fenced code block's language token is passed straight into a CSS class name (`language-<token>`) and accepted as written - any token, including one with punctuation in it (`` ```c++ ``, `` ```objective-c ``) - not restricted to a plain word.
+
+**A relative link to another file - `[guide](guide.md#heading)` - is refused, not published pointing nowhere.** This converter reads one file at a time; it has no way to know whether `guide.md` has even been published yet, let alone at what Confluence URL. Link that page's absolute Confluence URL once it exists, or point at an absolute external URL. An in-page anchor (`[above](#section)`) and a `mailto:` link both still work - neither is a path to another file.
 
 **Read these two files first. Every time.** They are the difference between a page that uses the platform and a page that is a wall of bold text:
 

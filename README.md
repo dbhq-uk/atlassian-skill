@@ -283,14 +283,26 @@ blocks convert cleanly, and GFM task lists (`- [ ]`) become real Confluence
 task lists.
 
 A panel, a status lozenge, a decision list, a layout and a column width have
-no markdown syntax at all - write them as raw HTML+ inline, which markdown
-permits and this skill passes through untouched.
+no markdown syntax at all - write them as raw HTML+ on its own line, which
+markdown permits and this skill passes through untouched. The same markup
+embedded mid-sentence in running prose is not detected as a tag and is
+escaped to visible text instead - give an inline component its own line.
 
 **Nested markdown lists are refused, not mangled.** `- one` with a
 `  - nested` line indented under it stops the conversion outright, naming the
 line, rather than silently splitting into two lists with the marker left as
 stray text in the page. Flatten it to a top-level item, or write the nesting
 directly in HTML+.
+
+**A relative link to another file is refused, not published pointing
+nowhere.** `[guide](guide.md#heading)` cannot be resolved - this converter
+reads one file at a time and has no way to know that file's own published
+Confluence URL, or whether it has been published at all. Link the absolute
+Confluence URL once it exists, or an absolute external URL. An in-page anchor
+(`[above](#section)`) and a `mailto:` link both still work.
+
+A fenced code block's language token is accepted as written, punctuation and
+all (`` ```c++ ``), not restricted to a plain word.
 
 ## Files
 
