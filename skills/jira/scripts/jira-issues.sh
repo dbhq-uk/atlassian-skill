@@ -120,8 +120,22 @@ case "${1:-}" in
         ;;
 
     bulk)
-        PROJECT="${2:-}"; FILE="${3:-}"; DRY=0
-        [ "${4:-}" = "--dry-run" ] && DRY=1
+        shift
+        PROJECT="${1:-}"; FILE="${2:-}"; shift 2 2>/dev/null || true
+        DRY=0
+        # Same loop create uses below: an unrecognised option is rejected
+        # rather than silently ignored, which is what let a misspelt
+        # --dryrun fall through to a live run.
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --dry-run) DRY=1; shift ;;
+                *)
+                    echo "Error: unknown option '$1'." >&2
+                    echo "Usage: jira-issues.sh bulk <PROJECT> <file.json> [--dry-run]" >&2
+                    exit 1
+                    ;;
+            esac
+        done
         if [ -z "$PROJECT" ] || [ -z "$FILE" ]; then
             echo "Usage: jira-issues.sh bulk <PROJECT> <file.json> [--dry-run]" >&2
             exit 1
@@ -166,8 +180,10 @@ case "${1:-}" in
                 echo "$RESULT" | sed 's/^/    /' >&2
                 FAILED=$((FAILED + 1))
             fi
-            # Stay inside the 60 requests/minute limit
-            sleep 0.2
+            # Stay inside the roughly 60 requests/minute limit - one
+            # request a second, not five: 0.2s here used to pace this at
+            # 300/minute, five times faster than the limit the docs claimed.
+            sleep 1
         done
         echo
         if [ "$DRY" = "1" ]; then

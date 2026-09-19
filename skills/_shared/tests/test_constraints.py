@@ -197,6 +197,64 @@ class TestNoForceFlag(unittest.TestCase):
             self.assertNotIn('"--force"', text, str(path))
 
 
+class TestBulkRejectsAnUnrecognisedFourthArgument(unittest.TestCase):
+    """jira-issues.sh bulk used to accept any fourth argument as a silent
+    no-op unless it was exactly "--dry-run" - so `bulk PAY tickets.json
+    --dryrun` (a plausible misspelling) ran live instead of refusing. This
+    runs the real script, with a throwaway config so it never reaches a
+    network call: --dry-run's own branch never calls curl, and an
+    unrecognised option is now rejected before the file is even read.
+    """
+
+    SCRIPT = REPO / "skills" / "jira" / "scripts" / "jira-issues.sh"
+
+    def _home_with_config(self, tmp):
+        config_dir = tmp / ".dbhq" / "atlassian"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.json").write_text(
+            '{"site":"https://example.atlassian.net",'
+            '"email":"e@x.com","token":"secret"}'
+        )
+        return tmp
+
+    def _tickets_file(self, tmp):
+        path = tmp / "tickets.json"
+        path.write_text('[{"summary": "Test one"}]')
+        return path
+
+    def test_a_misspelt_dry_run_flag_is_rejected_not_run_live(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = pathlib.Path(tmp)
+            home = self._home_with_config(tmp)
+            tickets = self._tickets_file(tmp)
+            result = subprocess.run(
+                ["bash", str(self.SCRIPT), "bulk", "PAY", str(tickets), "--dryrun"],
+                capture_output=True, text=True,
+                env={"HOME": str(home), "PATH": os.environ.get("PATH", "")},
+            )
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertIn("unknown option", result.stderr)
+            # Never reaches the point of reporting any per-issue action -
+            # a live run and a rejected one must not look the same.
+            self.assertNotIn("Test one", result.stdout)
+
+    def test_the_correct_spelling_still_runs_as_a_dry_run(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = pathlib.Path(tmp)
+            home = self._home_with_config(tmp)
+            tickets = self._tickets_file(tmp)
+            result = subprocess.run(
+                ["bash", str(self.SCRIPT), "bulk", "PAY", str(tickets), "--dry-run"],
+                capture_output=True, text=True,
+                env={"HOME": str(home), "PATH": os.environ.get("PATH", "")},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("dry run - nothing will be sent", result.stdout)
+            self.assertIn("Test one", result.stdout)
+
+
 class TestPublishVersionParserTracksConfluencePagesWording(unittest.TestCase):
     """publish.sh scrapes a plain-text line confluence-pages.sh prints, with
     nothing else asserting the two agree - a coupling across two files that
