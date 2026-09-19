@@ -673,6 +673,57 @@ class TestNesting(unittest.TestCase):
             "blockCard", "paragraph",
         )
 
+    # -- Independent review, MAJOR 4: FORBIDDEN_CHILDREN is a denylist, so a
+    # pair nobody had named as forbidden passed straight through, however
+    # implausible the pair - none of these four was in any set anywhere.
+    # ALLOWED_CHILDREN (a closed allow-list, direct parent only) closes the
+    # first three; paragraph moving onto the shared None/inline-only
+    # sentinel closes the second along with every other block type its old
+    # bespoke set never named; the codeBlock case needed its own fix, since
+    # it is not a parent/child type pair at all - the child really is a
+    # "text" node, TEXT_ONLY's own check, the violation is the *marks* that
+    # text carries.
+
+    def test_a_bullet_list_cannot_hold_a_paragraph_directly(self):
+        self._rejects(
+            "<ul><p>Wrong parent</p></ul>", "listItem", "bulletList",
+        )
+
+    def test_an_ordered_list_cannot_hold_a_paragraph_directly(self):
+        self._rejects(
+            "<ol><p>Wrong parent</p></ol>", "listItem", "orderedList",
+        )
+
+    def test_a_paragraph_cannot_nest_in_a_paragraph(self):
+        self._rejects(
+            "<p><p>Nested</p></p>", "paragraph",
+        )
+
+    def test_a_table_cell_cannot_sit_directly_in_a_table_the_tr_skipped(self):
+        self._rejects(
+            "<table><td><p>Cell</p></td></table>", "tableRow", "table",
+        )
+
+    def test_a_table_row_can_only_hold_cells_not_a_bare_paragraph(self):
+        self._rejects(
+            "<table><tr><p>Wrong parent</p></tr></table>",
+            "tableCell", "tableRow",
+        )
+
+    def test_marked_text_is_rejected_inside_a_code_block(self):
+        self._rejects(
+            "<pre><code>plain <strong>bold</strong> text</code></pre>",
+            "code block",
+        )
+
+    def test_the_language_setting_code_tag_is_still_fine_in_a_code_block(self):
+        # The one <code> use inside a <pre> that is not a mark at all - see
+        # the branch just above the codeBlock-marks check in
+        # handle_starttag. Must keep working: it is how a code block's
+        # language is authored.
+        doc = html_to_adf('<pre><code class="language-python">x = 1</code></pre>')
+        self.assertEqual(doc["content"][0]["attrs"]["language"], "python")
+
 
 ROUND_TRIP_CASES = [
     "<p>Hello.</p>",

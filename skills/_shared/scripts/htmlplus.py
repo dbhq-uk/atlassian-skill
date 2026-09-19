@@ -118,18 +118,18 @@ FORBIDDEN_CHILDREN = {
     "blockquote": {"blockquote", "heading", "table", "panel", "expand",
                    "layoutSection"},
     "table": {"table"},
-    # A paragraph is not covered by the shared None/inline-only sentinel
-    # below, because it legitimately holds non-block inline content that
-    # sentinel would reject too (status, date, inlineCard) - it only needs
-    # to reject the block-shaped things a <p> can end up wrapping through
-    # this parser, notably a block/embed card that was written nested
-    # inside a paragraph rather than left as a sibling of it. mediaSingle
-    # and media belong in this set for the same reason: a figure is a
-    # block, exactly like a table or a panel, and cannot sit inside a
-    # paragraph either.
-    "paragraph": {"blockCard", "embedCard", "table", "panel", "expand",
-                  "layoutSection", "heading", "rule", "mediaSingle", "media"},
-    # Inline-content-only containers: any block child at all is a violation.
+    # Inline-content-only containers: any block child at all is a violation
+    # (the None sentinel - see _check_nesting). A paragraph shares it with
+    # heading/taskItem/decisionItem/caption below: earlier this had its own
+    # bespoke set here, on the reasoning that the shared sentinel would
+    # wrongly reject the non-block inline content a paragraph legitimately
+    # holds (status, date, inlineCard) - but none of those three are
+    # members of BLOCK_TYPES, so the None sentinel never touches them; it
+    # only ever fires on an actual block. The bespoke set was also an
+    # incomplete copy of BLOCK_TYPES - real, but silently accepted, gaps
+    # included a bulletList, a tableRow or a second paragraph spliced
+    # straight inside a paragraph, none of which were in it.
+    "paragraph": None,
     "taskItem": None,
     "decisionItem": None,
     "heading": None,
@@ -138,6 +138,36 @@ FORBIDDEN_CHILDREN = {
     # it - a caption can still hold, say, a status lozenge.
     "caption": None,
     "codeBlock": TEXT_ONLY,
+}
+
+# Containers whose ADF content model is an exact, closed set of allowed
+# child types - "only these, full stop" - rather than the "anything except
+# these few" shape FORBIDDEN_CHILDREN checks. A denylist cannot state this
+# kind of rule at all: nothing above stopped a <p> spliced straight under a
+# <ul>, or a <td> written straight under a <table> with the <tr> skipped,
+# because neither "p under bulletList" nor "tableCell under table" was ever
+# named as forbidden - the gap was in what the list didn't say, not in what
+# it said wrong.
+#
+# Checked against the DIRECT parent only (see _check_nesting), never walked
+# up the whole open-block stack the way FORBIDDEN_CHILDREN is: a <p> two
+# levels under a <ul>, inside its own <li>, is exactly right, and a
+# stack-walking version of this check would wrongly reject it as "not a
+# listItem under a bulletList" even though its immediate parent is the
+# listItem, not the bulletList several levels up.
+#
+# Deliberately not exhaustive, and not a general ADF schema: a handful of
+# containers happen to have a content model this narrow, and this only
+# lists the ones where a gap was actually reachable by hand-authoring
+# through this parser. Most containers' content model is defined by what it
+# excludes, not what it allows, and stays on FORBIDDEN_CHILDREN above -
+# rewriting every one of those into an allow-list too would just be a
+# longer way of saying the same rule for no gain.
+ALLOWED_CHILDREN = {
+    "bulletList": {"listItem"},
+    "orderedList": {"listItem"},
+    "table": {"tableRow"},
+    "tableRow": {"tableCell", "tableHeader"},
 }
 
 # Every block node type this converter emits. Used for the inline-only check.
@@ -483,17 +513,36 @@ class _Builder(HTMLParser):
     def _check_nesting(self, child_type):
         """Reject an invalid parent/child pair, naming both.
 
-        Walks the whole stack of open blocks, innermost first, not only the
-        immediate parent. A table nested inside an expand nested inside a
-        table cell is still a table inside a table cell as far as ADF is
-        concerned - the expand itself is a perfectly legal home for a table,
-        so a check that stopped at the nearest ancestor would let that
-        violation through undetected (Confluence would still reject it, just
-        after the call, which is the exact failure mode this function exists
-        to catch first). So every open ancestor that has a rule in
-        FORBIDDEN_CHILDREN gets checked in turn; the walk only stops early
-        when it finds a violation to raise.
+        Two checks, deliberately different in shape and in reach:
+
+        ALLOWED_CHILDREN first, against the DIRECT parent only - a closed
+        list of exactly what a handful of containers may hold, for the few
+        content models narrow enough that stating them positively is both
+        possible and clearer than listing everything else they exclude.
+
+        Then FORBIDDEN_CHILDREN, walked up the whole stack of open blocks,
+        innermost first, not only the immediate parent. A table nested
+        inside an expand nested inside a table cell is still a table inside
+        a table cell as far as ADF is concerned - the expand itself is a
+        perfectly legal home for a table, so a check that stopped at the
+        nearest ancestor would let that violation through undetected
+        (Confluence would still reject it, just after the call, which is
+        the exact failure mode this function exists to catch first). So
+        every open ancestor that has a rule in FORBIDDEN_CHILDREN gets
+        checked in turn; the walk only stops early when it finds a
+        violation to raise.
         """
+        immediate_parent = self.blocks[-1].get("type")
+        if immediate_parent in ALLOWED_CHILDREN:
+            allowed = ALLOWED_CHILDREN[immediate_parent]
+            if child_type not in allowed:
+                names = " or ".join(sorted(allowed))
+                raise ConversionError(
+                    f"{a_or_an(immediate_parent).capitalize()} {immediate_parent} "
+                    f"can only directly contain {names}, not "
+                    f"{a_or_an(child_type)} {child_type}."
+                )
+
         for ancestor in reversed(self.blocks):
             parent_type = ancestor.get("type")
             if parent_type not in FORBIDDEN_CHILDREN:
@@ -633,6 +682,24 @@ class _Builder(HTMLParser):
                         cls[len("language-"):]
                     )
         elif tag in INLINE_MARKS:
+            if self.blocks[-1]["type"] == "codeBlock":
+                # A real ADF code block's text is marks-free, full stop
+                # (TEXT_ONLY, above) - but that check only ever saw the
+                # text node's *type*, never whether it carried marks, so
+                # a <strong> or <em> opened while still inside a <pre>
+                # pushed a mark that later attached to the text right past
+                # it: the nesting validator caught the wrong shape of
+                # violation for this container and missed the one that
+                # actually reaches it. Caught here, at the mark tag itself,
+                # before any text picks it up - <code> is exempt, since
+                # inside a codeBlock it names the language instead of
+                # opening a mark (see the branch just above).
+                raise ConversionError(
+                    f"<{tag}> found inside a code block. A code block's "
+                    f"content is plain text only - no marks - so this "
+                    f"cannot be represented. Remove the markup, or move "
+                    f"the text out of the code block."
+                )
             mark = {"type": INLINE_MARKS[tag]}
             if tag in ("sub", "sup"):
                 mark["attrs"] = {"type": tag}
