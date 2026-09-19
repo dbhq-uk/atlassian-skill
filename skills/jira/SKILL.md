@@ -133,7 +133,7 @@ ${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh mine [max]
 
 ## Limits
 
-Jira Cloud allows roughly 60 authenticated requests a minute. `bulk` paces itself at five a second and reports `Created:` and `Failed:` counts at the end; a partial failure leaves the successful issues in place.
+Jira Cloud allows roughly 60 authenticated requests a minute. `bulk` paces itself at one a second and reports `Created:` and `Failed:` counts at the end; a partial failure leaves the successful issues in place.
 
 ## Credentials
 

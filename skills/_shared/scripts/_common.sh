@@ -87,18 +87,23 @@ api() {
 
     cfg=$(mktemp) || { echo "Error: cannot create a temp file for the curl config." >&2; exit 1; }
     chmod 600 "$cfg"
-    # The `rm -f "$cfg"` below only runs on a normal return from this
+    # Response headers hold no credential (the token goes out, never comes
+    # back), but they are the only place a 429's Retry-After lives, so it is
+    # dumped to its own temp file and read below.
+    hdrs=$(mktemp) || { echo "Error: cannot create a temp file for the response headers." >&2; exit 1; }
+    # The `rm -f "$cfg" "$hdrs"` below only runs on a normal return from this
     # function. A signal - Ctrl-C while curl is mid-request, a killed parent
     # - skips straight past it and leaves a file naming the token in plain
     # text (`user = "email:TOKEN"`) sitting in /tmp. The trap is the same
     # cleanup on every exit path, not just the one this function's own
     # control flow happens to reach.
-    trap 'rm -f "$cfg"' EXIT INT TERM HUP
+    trap 'rm -f "$cfg" "$hdrs"' EXIT INT TERM HUP
     {
         printf 'url = "%s%s"\n' "$SITE" "$path"
         printf 'user = "%s:%s"\n' "$EMAIL" "$TOKEN"
         printf 'request = "%s"\n' "$method"
         printf 'header = "Accept: application/json"\n'
+        printf 'dump-header = "%s"\n' "$hdrs"
         printf 'silent\n'
         printf 'show-error\n'
         printf 'write-out = "\\n%%{http_code}"\n'
@@ -123,9 +128,9 @@ api() {
     fi
     curl_status=$?
     set -e
-    rm -f "$cfg"
 
     if [ "$curl_status" -ne 0 ]; then
+        rm -f "$cfg" "$hdrs"
         echo "Error: the request to the Atlassian API failed (curl exit $curl_status)." >&2
         echo "Cause: a network, DNS, TLS or proxy failure - see curl's own message above, if any." >&2
         echo "Fix: check connectivity and try again." >&2
@@ -140,6 +145,16 @@ api() {
     # this file and read them; shellcheck sees only this file, so it cannot.
     # shellcheck disable=SC2034
     API_BODY="${out%"$nl"*}"
+    # A 429's Retry-After, when the API sent one - read before the header
+    # file is removed. Header names are case-insensitive and curl lower-
+    # cases nothing, so match either case; strip the trailing \r a dumped
+    # HTTP header carries.
+    # shellcheck disable=SC2034
+    API_RETRY_AFTER=""
+    if [ "$API_STATUS" = "429" ]; then
+        API_RETRY_AFTER=$(grep -i '^retry-after:' "$hdrs" 2>/dev/null | tail -1 | cut -d: -f2- | tr -d '\r' | sed 's/^ *//')
+    fi
+    rm -f "$cfg" "$hdrs"
 }
 
 # api_ok - true when the last api call returned a 2xx status.
@@ -166,7 +181,13 @@ api_fail() {
         401) echo "Fix: the email or token is wrong. Re-run atlassian-setup.sh." >&2 ;;
         403) echo "Fix: your account lacks permission for this project." >&2 ;;
         404) echo "Fix: check the project key or issue key exists and is visible to you." >&2 ;;
-        429) echo "Fix: rate limited (60 requests/minute). Wait a minute and retry." >&2 ;;
+        429)
+            if [ -n "${API_RETRY_AFTER:-}" ]; then
+                echo "Fix: rate limited (roughly 60 requests/minute). The API says wait ${API_RETRY_AFTER}s, then retry." >&2
+            else
+                echo "Fix: rate limited (roughly 60 requests/minute). Wait a minute and retry." >&2
+            fi
+            ;;
     esac
     exit 1
 }

@@ -201,7 +201,7 @@ Issue type names are per-project. `Task` in one project may be `Story` or
 
 `bulk` takes a JSON array. Only `summary` is required; `type` defaults to
 `Task`. **Run it with `--dry-run` first** - that prints the exact payload for
-every issue and sends nothing. A batch paces itself at five requests a second
+every issue and sends nothing. A batch paces itself at one request a second
 to stay inside Jira's limit of roughly 60 a minute, and reports `Created:` and
 `Failed:` counts at the end. A partial failure leaves the successful issues in
 place, because there is no rollback: the skill cannot delete.
