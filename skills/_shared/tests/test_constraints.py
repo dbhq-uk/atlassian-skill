@@ -503,6 +503,119 @@ class TestDiscoveryWarnsWhenTruncated(unittest.TestCase):
             self.assertIn("More results exist", result.stdout)
 
 
+class TestConfluencePagesReadStdoutIsAJustTheBody(unittest.TestCase):
+    """The documented workflow is:
+
+        confluence-pages.sh read 1234567 > /tmp/current.html
+        # splice your change into /tmp/current.html
+        confluence-pages.sh update 1234567 --body-file /tmp/current.html --base-version 14
+
+    `read` used to print its "# page id ..." header on stdout ahead of the
+    body, so the redirected file started with two lines of loose text -
+    htmlplus.py correctly refused them ("Loose text outside any block").
+    The header now goes to stderr (still visible on a terminal, where both
+    streams interleave to the same tty; still readable via 2>&1 where a
+    caller needs it, as publish.sh's own read calls do). This runs the
+    real script against a fake curl, captures ONLY stdout (redirecting
+    stderr away, exactly as `> file` does), and proves it round-trips
+    through the real converter with no error - for --format html, the
+    documented workflow, and --format adf, which the finding also named
+    ("does not emit a standalone JSON document, so it cannot be piped to
+    jq").
+    """
+
+    PAGES_SH = (REPO / "skills" / "confluence" / "scripts"
+                / "confluence-pages.sh")
+    HTMLPLUS = REPO / "skills" / "_shared" / "scripts" / "htmlplus.py"
+
+    FAKE_CURL = """#!/bin/bash
+cfg=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -K) cfg="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+hdrfile=$(grep '^dump-header' "$cfg" | sed 's/.*= "\\(.*\\)"/\\1/')
+: > "$hdrfile"
+printf '{"id":"1234567","title":"Test Page","status":"current","version":{"number":3},"body":{"atlas_doc_format":{"value":"{\\\\"type\\\\":\\\\"doc\\\\",\\\\"version\\\\":1,\\\\"content\\\\":[{\\\\"type\\\\":\\\\"paragraph\\\\",\\\\"content\\\\":[{\\\\"type\\\\":\\\\"text\\\\",\\\\"text\\\\":\\\\"Hello\\\\"}]}]}"}}}'
+printf '\\n200'
+"""
+
+    def _bin_and_home(self, tmp):
+        bin_dir = tmp / "bin"
+        bin_dir.mkdir()
+        fake_curl = bin_dir / "curl"
+        fake_curl.write_text(self.FAKE_CURL)
+        fake_curl.chmod(0o755)
+        home = tmp / "home"
+        config_dir = home / ".dbhq" / "atlassian"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.json").write_text(
+            '{"site":"https://example.atlassian.net",'
+            '"email":"e@x.com","token":"secret"}'
+        )
+        return bin_dir, home
+
+    def test_html_stdout_alone_converts_cleanly_the_documented_workflow(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = pathlib.Path(tmp)
+            bin_dir, home = self._bin_and_home(tmp)
+            result = subprocess.run(
+                ["bash", str(self.PAGES_SH), "read", "1234567"],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+                env={"HOME": str(home),
+                     "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}"},
+            )
+            self.assertEqual(result.returncode, 0)
+            # The bug's own symptom: no line of the redirected body should
+            # be the header comment.
+            self.assertNotIn("page id", result.stdout)
+            convert = subprocess.run(
+                ["python3", str(self.HTMLPLUS), "to-adf"],
+                input=result.stdout, capture_output=True, text=True,
+            )
+            self.assertEqual(
+                convert.returncode, 0,
+                f"the redirected body did not convert cleanly: {convert.stderr}",
+            )
+
+    def test_adf_stdout_alone_is_standalone_json_pipeable_to_jq(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = pathlib.Path(tmp)
+            bin_dir, home = self._bin_and_home(tmp)
+            result = subprocess.run(
+                ["bash", str(self.PAGES_SH), "read", "1234567", "--format", "adf"],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+                env={"HOME": str(home),
+                     "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}"},
+            )
+            self.assertEqual(result.returncode, 0)
+            jq = subprocess.run(
+                ["jq", "empty"], input=result.stdout, capture_output=True, text=True,
+            )
+            self.assertEqual(
+                jq.returncode, 0,
+                f"stdout was not a standalone JSON document: {jq.stderr}",
+            )
+
+    def test_the_version_header_still_prints_live_on_stderr(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = pathlib.Path(tmp)
+            bin_dir, home = self._bin_and_home(tmp)
+            result = subprocess.run(
+                ["bash", str(self.PAGES_SH), "read", "1234567"],
+                capture_output=True, text=True,
+                env={"HOME": str(home),
+                     "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}"},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("pass --base-version 3 to update", result.stderr)
+
+
 class TestPublishVersionParserTracksConfluencePagesWording(unittest.TestCase):
     """publish.sh scrapes a plain-text line confluence-pages.sh prints, with
     nothing else asserting the two agree - a coupling across two files that

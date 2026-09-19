@@ -84,7 +84,7 @@ ${CLAUDE_SKILL_DIR}/scripts/confluence-pages.sh create \
 
 So:
 
-1. **Read the page**, in `--format html`, and note the version number from the header (`... pass --base-version N to update`).
+1. **Read the page**, in `--format html`, and note the version number from the header (`... pass --base-version N to update`). The header prints on stderr, so it still shows on your terminal even while `> /tmp/current.html` sends the body itself to the file - the redirect captures a clean fragment, not the header lines ahead of it.
 2. **Splice your change into what came back.** Preserve everything you are not deliberately changing: `data-colwidth` values, inline comment anchors, media ids and collections.
 3. **Update, passing that same `--base-version`.**
 4. **Verify by reading it again** and checking the section you changed.

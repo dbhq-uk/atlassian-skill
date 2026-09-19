@@ -121,16 +121,26 @@ case "$CMD" in
         api_ok || api_fail "$API_BODY" "reading page $PAGE_ID"
         TITLE=$(printf '%s' "$API_BODY" | jq -r '.title')
         VERSION=$(printf '%s' "$API_BODY" | jq -r '.version.number')
-        echo "# $TITLE"
-        echo "# page id $PAGE_ID, version $VERSION - pass --base-version $VERSION to update"
-        echo
+        # The two header lines (and the blank lines around them) go to
+        # stderr, not stdout. The documented workflow is
+        # `read N > /tmp/current.html`, splice, then `update --body-file`
+        # that same file - and a "# page id N, version V - ..." line ahead
+        # of the fragment is loose text outside any block, which htmlplus.py
+        # correctly refuses. On a terminal both streams still interleave to
+        # the same tty, so this changes nothing about what a human sees
+        # interactively - only what a redirect captures. publish.sh reads
+        # the version back out of this exact line; see its own read calls,
+        # which merge stderr back in with 2>&1 for that reason.
+        echo "# $TITLE" >&2
+        echo "# page id $PAGE_ID, version $VERSION - pass --base-version $VERSION to update" >&2
+        echo >&2
         BODY=$(printf '%s' "$API_BODY" | jq -r '.body.atlas_doc_format.value')
         case "$FORMAT" in
             adf)      printf '%s' "$BODY" | jq . ;;
             markdown) printf '%s' "$BODY" | python3 "$HTMLPLUS" to-markdown ;;
             html)     printf '%s' "$BODY" | python3 "$HTMLPLUS" to-html ;;
         esac
-        echo
+        echo >&2
         ;;
 
     create)

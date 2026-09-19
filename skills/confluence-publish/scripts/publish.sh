@@ -222,9 +222,15 @@ if [ -n "$PAGE_ID" ]; then
     # anywhere earlier in this run. See the header comment: the file is the
     # master, so there is nothing to splice, only something to notice if a
     # concurrent edit is in flight right now.
-    if ! READ_OUT=$("$PAGES" read "$PAGE_ID" --format adf); then
+    #
+    # 2>&1: confluence-pages.sh read now prints its "# page id N, version V"
+    # line on stderr (so a redirected `read > file` yields a clean body),
+    # and the version below is parsed off exactly that line - so stderr has
+    # to be captured here too, unlike a plain stdout-only read.
+    if ! READ_OUT=$("$PAGES" read "$PAGE_ID" --format adf 2>&1); then
         echo >&2
         echo "Publish stopped: could not read page $PAGE_ID before updating. Nothing was sent." >&2
+        printf '%s\n' "$READ_OUT" | sed 's/^/    /' >&2
         exit 1
     fi
     BASE_VERSION=$(printf '%s\n' "$READ_OUT" \

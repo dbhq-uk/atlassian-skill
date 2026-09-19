@@ -247,7 +247,11 @@ cd ~/.claude/skills/confluence/scripts
 ```
 
 Every `read` prints the page's current version and the exact flag an update
-needs: `# page id 1234567, version 14 - pass --base-version 14 to update`.
+needs: `# page id 1234567, version 14 - pass --base-version 14 to update`. That
+line goes to stderr, not stdout, so `read 1234567 > /tmp/current.html` still
+shows it on your terminal while the redirect captures a clean fragment - one
+you can splice a change into and pass straight to `update --body-file`, with
+no header line ahead of it to reject as loose text.
 `update` always needs that `--base-version` - see [§ A known limit](#a-known-limit-the-round-trip-gate)
 for what it protects against and what it does not.
 
