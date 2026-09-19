@@ -244,6 +244,17 @@ case "${1:-}" in
         printf '%s' "$RESPONSE" | jq -r '.issues[] | "\(.key)\t\(.fields.status.name)\t\(.fields.issuetype.name)\t\(.fields.summary)"' | column -t -s $'\t'
         echo
         echo "$COUNT issue(s) shown."
+        # /rest/api/3/search/jql is cursor-paged and only the first page is
+        # fetched here. It no longer returns a total count at all, so
+        # nextPageToken is the only documented signal - and Atlassian's own
+        # forums report it can be flaky, so a full page (COUNT == MAX) is
+        # treated as a second, weaker signal rather than trusted silence.
+        NEXT_TOKEN=$(printf '%s' "$RESPONSE" | jq -r '.nextPageToken // empty')
+        if [ -n "$NEXT_TOKEN" ]; then
+            echo "More results exist beyond these $COUNT - raise max (currently $MAX) or narrow the JQL."
+        elif [ "$COUNT" -eq "$MAX" ]; then
+            echo "This is a full page ($COUNT of max $MAX) - there may be more. Raise max or narrow the JQL."
+        fi
         ;;
 
     mine)

@@ -36,6 +36,8 @@ ${CLAUDE_SKILL_DIR}/scripts/jira-meta.sh whoami                 # who the token 
 
 Issue type names are per-project and case-sensitive on the wire. `Task` in one project may be `Story` or `Work Item` in another - read `types` rather than assuming.
 
+`projects`, `types` and `fields` each follow every page the API offers rather than stopping at the first, so a project, issue type or required field that lives past the first page is not silently invisible to this check.
+
 ## Creating issues
 
 One issue:
@@ -121,6 +123,8 @@ ${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh mine [max]
 ```
 
 `search` posts to `/rest/api/3/search/jql`. The old `GET /rest/api/3/search` is deprecated and is not used here.
+
+`search` fetches one page only, up to `max` (default 25). It is not silent about that: if the response carries a `nextPageToken`, or the page is exactly full, it says more results may exist and to raise `max` or narrow the JQL, rather than let a truncated result set look complete.
 
 ## Rules
 

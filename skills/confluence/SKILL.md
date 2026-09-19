@@ -40,6 +40,8 @@ ${CLAUDE_SKILL_DIR}/scripts/confluence-search.sh cql 'space = DOCS and lastmodif
 
 CQL is the leverage. `space =`, `title ~`, `text ~`, `ancestor =`, `lastmodified >=`.
 
+Every search here fetches one page, up to its `[limit]` (`spaces` defaults to 50, `text`/`cql` to 25). Confluence's own pagination is cursor-based, not a total count, but the cursor's presence still says when there is more - and when it does, the command says so rather than let a truncated result set pass as complete. Raise the limit or narrow the query.
+
 ## Reading a page
 
 A page id is always numeric - `read` refuses anything else (a URL, a title) with a clear error rather than a confusing one from deeper in the call chain.

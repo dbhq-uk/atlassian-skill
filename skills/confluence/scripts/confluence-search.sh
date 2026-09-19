@@ -47,6 +47,15 @@ case "$CMD" in
         printf '%s' "$API_BODY" | jq -r '
             "ID\tKEY\tNAME",
             (.results[] | "\(.id)\t\(.key)\t\(.name)")' | column -t -s$'\t'
+        # v2 is cursor-paged (_links.next), not offset-based, and this
+        # command takes an explicit limit rather than following every page
+        # itself - so say so rather than let a site with more spaces than
+        # the limit look complete when it is not.
+        if printf '%s' "$API_BODY" | jq -e '._links.next // empty' > /dev/null 2>&1; then
+            COUNT=$(printf '%s' "$API_BODY" | jq '.results | length')
+            echo
+            echo "$COUNT space(s) shown - more exist. Raise the limit (currently $LIMIT) or narrow with a search."
+        fi
         ;;
 
     cql|text)
@@ -83,6 +92,12 @@ case "$CMD" in
             | column -t -s$'\t'
         echo
         echo "$COUNT result(s). Read one with: confluence-pages.sh read <ID>"
+        # This search is cursor-paged (_links.next), and only the first
+        # page is fetched - flag it rather than let a truncated result set
+        # pass as the whole answer.
+        if printf '%s' "$API_BODY" | jq -e '._links.next // empty' > /dev/null 2>&1; then
+            echo "More results exist beyond these $COUNT - raise the limit (currently $LIMIT) or narrow the query."
+        fi
         ;;
 
     *) usage ;;

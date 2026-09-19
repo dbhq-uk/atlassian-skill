@@ -255,6 +255,194 @@ class TestBulkRejectsAnUnrecognisedFourthArgument(unittest.TestCase):
             self.assertIn("Test one", result.stdout)
 
 
+class TestJiraMetaFollowsPagination(unittest.TestCase):
+    """jira-meta.sh projects used to fetch exactly one page of 100 and
+    filter locally - a project living past the first page was invisible to
+    both `projects <search>` and, by extension, to an agent discovering the
+    right project before creating an issue. This runs the real script
+    against a fake two-page curl and checks both pages' projects come back.
+    """
+
+    SCRIPT = REPO / "skills" / "jira" / "scripts" / "jira-meta.sh"
+
+    FAKE_CURL = """#!/bin/bash
+cfg=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -K) cfg="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+url=$(grep '^url' "$cfg" | sed 's/.*= "\\(.*\\)"/\\1/')
+hdrfile=$(grep '^dump-header' "$cfg" | sed 's/.*= "\\(.*\\)"/\\1/')
+: > "$hdrfile"
+case "$url" in
+  *startAt=0*)
+    printf '{"values":[{"key":"AAA","name":"Alpha","projectTypeKey":"software"}],"isLast":false,"startAt":0,"maxResults":100,"total":2}'
+    printf '\\n200'
+    ;;
+  *startAt=1*)
+    printf '{"values":[{"key":"BBB","name":"Beta","projectTypeKey":"software"}],"isLast":true,"startAt":1,"maxResults":100,"total":2}'
+    printf '\\n200'
+    ;;
+  *)
+    printf '{"values":[],"isLast":true}'
+    printf '\\n200'
+    ;;
+esac
+"""
+
+    def test_projects_merges_a_second_page_rather_than_stopping_at_the_first(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = pathlib.Path(tmp)
+            bin_dir = tmp / "bin"
+            bin_dir.mkdir()
+            fake_curl = bin_dir / "curl"
+            fake_curl.write_text(self.FAKE_CURL)
+            fake_curl.chmod(0o755)
+
+            home = tmp / "home"
+            config_dir = home / ".dbhq" / "atlassian"
+            config_dir.mkdir(parents=True)
+            (config_dir / "config.json").write_text(
+                '{"site":"https://example.atlassian.net",'
+                '"email":"e@x.com","token":"secret"}'
+            )
+
+            result = subprocess.run(
+                ["bash", str(self.SCRIPT), "projects"],
+                capture_output=True, text=True,
+                env={"HOME": str(home),
+                     "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}"},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("AAA", result.stdout)
+            self.assertIn("BBB", result.stdout)
+
+
+class TestDiscoveryWarnsWhenTruncated(unittest.TestCase):
+    """confluence-search.sh (spaces, cql/text) and jira-issues.sh search
+    fetch one page and used to say nothing when more existed - incomplete
+    discovery presented as authoritative. Each now checks the API's own
+    "there is more" signal (Confluence's `_links.next` cursor, Jira's
+    `nextPageToken`) and says so. This runs each real script against a
+    fake curl standing in for a truncated result set.
+    """
+
+    CONFLUENCE_SEARCH = (REPO / "skills" / "confluence" / "scripts"
+                          / "confluence-search.sh")
+    JIRA_ISSUES = REPO / "skills" / "jira" / "scripts" / "jira-issues.sh"
+
+    def _fake_curl(self, tmp, body_by_url_substring):
+        """A fake curl returning a different canned body depending on what
+        substring of the requested URL matches - good enough to tell
+        `spaces` from `search` without a real cursor-following mock.
+        """
+        bin_dir = tmp / "bin"
+        bin_dir.mkdir()
+        fake_curl = bin_dir / "curl"
+        cases = "\n".join(
+            f'  *{substr}*) printf {body!r}; printf "\\n200" ;;'
+            for substr, body in body_by_url_substring.items()
+        )
+        fake_curl.write_text(
+            "#!/bin/bash\n"
+            'cfg=""\n'
+            'while [ $# -gt 0 ]; do case "$1" in -K) cfg="$2"; shift 2 ;; '
+            "*) shift ;; esac; done\n"
+            'url=$(grep \'^url\' "$cfg" | sed \'s/.*= "\\(.*\\)"/\\1/\')\n'
+            'hdrfile=$(grep \'^dump-header\' "$cfg" | sed \'s/.*= "\\(.*\\)"/\\1/\')\n'
+            ': > "$hdrfile"\n'
+            f'case "$url" in\n{cases}\nesac\n'
+        )
+        fake_curl.chmod(0o755)
+        return bin_dir
+
+    def _home_with_config(self, tmp):
+        home = tmp / "home"
+        config_dir = home / ".dbhq" / "atlassian"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.json").write_text(
+            '{"site":"https://example.atlassian.net",'
+            '"email":"e@x.com","token":"secret"}'
+        )
+        return home
+
+    def test_confluence_spaces_warns_on_a_next_cursor(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = pathlib.Path(tmp)
+            bin_dir = self._fake_curl(tmp, {
+                "spaces": '{"results":[{"id":"1","key":"DOCS","name":"Docs"}],'
+                          '"_links":{"next":"/wiki/api/v2/spaces?cursor=abc"}}',
+            })
+            home = self._home_with_config(tmp)
+            result = subprocess.run(
+                ["bash", str(self.CONFLUENCE_SEARCH), "spaces"],
+                capture_output=True, text=True,
+                env={"HOME": str(home),
+                     "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}"},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("more exist", result.stdout)
+
+    def test_confluence_text_search_warns_on_a_next_cursor(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = pathlib.Path(tmp)
+            bin_dir = self._fake_curl(tmp, {
+                "rest/api/search": '{"results":[{"content":{"id":"111","title":"Egress"}}],'
+                                    '"_links":{"next":"/wiki/rest/api/search?cursor=xyz"}}',
+            })
+            home = self._home_with_config(tmp)
+            result = subprocess.run(
+                ["bash", str(self.CONFLUENCE_SEARCH), "text", "egress"],
+                capture_output=True, text=True,
+                env={"HOME": str(home),
+                     "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}"},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("More results exist", result.stdout)
+
+    def test_confluence_spaces_says_nothing_when_there_is_no_next_cursor(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = pathlib.Path(tmp)
+            bin_dir = self._fake_curl(tmp, {
+                "spaces": '{"results":[{"id":"1","key":"DOCS","name":"Docs"}]}',
+            })
+            home = self._home_with_config(tmp)
+            result = subprocess.run(
+                ["bash", str(self.CONFLUENCE_SEARCH), "spaces"],
+                capture_output=True, text=True,
+                env={"HOME": str(home),
+                     "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}"},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn("more exist", result.stdout)
+
+    def test_jira_search_warns_on_a_next_page_token(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = pathlib.Path(tmp)
+            bin_dir = self._fake_curl(tmp, {
+                "search/jql": '{"issues":[{"key":"PAY-1","fields":{"status":{"name":"Open"},'
+                              '"issuetype":{"name":"Task"},"summary":"One"}}],'
+                              '"nextPageToken":"tok123"}',
+            })
+            home = self._home_with_config(tmp)
+            result = subprocess.run(
+                ["bash", str(self.JIRA_ISSUES), "search",
+                 "assignee = currentUser()", "1"],
+                capture_output=True, text=True,
+                env={"HOME": str(home),
+                     "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}"},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("More results exist", result.stdout)
+
+
 class TestPublishVersionParserTracksConfluencePagesWording(unittest.TestCase):
     """publish.sh scrapes a plain-text line confluence-pages.sh prints, with
     nothing else asserting the two agree - a coupling across two files that
