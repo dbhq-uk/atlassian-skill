@@ -197,6 +197,66 @@ class TestNoForceFlag(unittest.TestCase):
             self.assertNotIn('"--force"', text, str(path))
 
 
+class TestCreateFieldEscapeHatch(unittest.TestCase):
+    """create had no way to serve a project-specific required field or a
+    component with no default - only project, type, summary, description,
+    labels, priority and parent. --field KEY=VALUE closes that gap, merged
+    into `fields` last. Runs the real script's --dry-run, which never
+    touches the network, so no fake curl is needed here.
+    """
+
+    SCRIPT = REPO / "skills" / "jira" / "scripts" / "jira-issues.sh"
+
+    def _run(self, tmp, *args):
+        config_dir = tmp / ".dbhq" / "atlassian"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.json").write_text(
+            '{"site":"https://example.atlassian.net",'
+            '"email":"e@x.com","token":"secret"}'
+        )
+        return subprocess.run(
+            ["bash", str(self.SCRIPT), "create", "PAY", "Task", "Summary",
+             *args, "--dry-run"],
+            capture_output=True, text=True,
+            env={"HOME": str(tmp), "PATH": os.environ.get("PATH", "")},
+        )
+
+    def test_a_plain_value_is_sent_as_a_string(self):
+        import tempfile, json
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self._run(pathlib.Path(tmp), "--field", "customfield_10050=Ops")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["fields"]["customfield_10050"], "Ops")
+
+    def test_a_json_value_is_sent_as_json_not_a_string(self):
+        import tempfile, json
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self._run(
+                pathlib.Path(tmp), "--field",
+                'components=[{"name":"Backend"}]',
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(
+                payload["fields"]["components"], [{"name": "Backend"}]
+            )
+
+    def test_it_refuses_to_set_a_field_the_dedicated_options_already_cover(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self._run(pathlib.Path(tmp), "--field", "summary=hijack")
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertIn("use the dedicated option", result.stderr)
+
+    def test_a_value_with_no_equals_sign_is_refused(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self._run(pathlib.Path(tmp), "--field", "noequals")
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertIn("needs key=value", result.stderr)
+
+
 class TestBulkRejectsAnUnrecognisedFourthArgument(unittest.TestCase):
     """jira-issues.sh bulk used to accept any fourth argument as a silent
     no-op unless it was exactly "--dry-run" - so `bulk PAY tickets.json

@@ -15,7 +15,7 @@ Jira issues (create and read only)
 Usage: jira-issues.sh <command> [args]
 
 Create:
-  create <PROJECT> <TYPE> <summary> [description] [--label L]... [--priority P] [--parent KEY] [--description-file FILE] [--dry-run]
+  create <PROJECT> <TYPE> <summary> [description] [--label L]... [--priority P] [--parent KEY] [--description-file FILE] [--field KEY=VALUE]... [--dry-run]
   bulk <PROJECT> <file.json> [--dry-run]
         file.json is an array: [{"summary": "...", "type": "Task",
                                  "description": "...", "labels": ["a"],
@@ -36,16 +36,33 @@ block, real checkboxes, instead of a wall of plain text. --description-file
 refuses a Confluence-only component (a status lozenge, a decision list, an
 expand, a layout) that Jira would accept and then render as nothing. It is
 mutually exclusive with the plain-text [description]; pass one or the other.
+
+--field KEY=VALUE (repeatable) sets any field project/type/summary/
+description/labels/priority/parent do not cover - a project-specific
+required field, or a component with no default. Read it with
+jira-meta.sh fields first, then pass the field id it names, e.g.
+--field customfield_10050=Ops or --field components='[{"name":"Backend"}]'.
+VALUE that parses as JSON is sent as JSON; anything else is sent as a
+plain string. It cannot be used to set the seven fields above - use their
+own option instead.
 EOF
 }
 
-# build_payload <project> <type> <summary> <desc-adf-json> <labels-json> <priority> <parent>
+# build_payload <project> <type> <summary> <desc-adf-json> <labels-json> <priority> <parent> [extra-fields-json]
 # desc-adf-json is a complete ADF document already built by the caller (via
 # text_to_adf or htmlplus_jira), or the literal string "null" - never plain
 # text. Kept out of this function so it has no opinion on which converter a
 # caller used to get there.
+#
+# extra-fields-json is a JSON object (default {}) merged into `fields` last -
+# create's --field escape hatch for a project's own required custom field or
+# a component with no default, which this payload otherwise has no way to
+# serve at all. It is built from options already checked against the fixed
+# field names above, so there is nothing for it to collide with.
 build_payload() {
     local project="$1" type="$2" summary="$3" desc_adf="$4" labels="$5" priority="$6" parent="$7"
+    local extra_fields="${8:-}"
+    [ -n "$extra_fields" ] || extra_fields="{}"
 
     jq -n \
         --arg project "$project" \
@@ -54,7 +71,8 @@ build_payload() {
         --argjson description "${desc_adf:-null}" \
         --argjson labels "${labels:-[]}" \
         --arg priority "$priority" \
-        --arg parent "$parent" '
+        --arg parent "$parent" \
+        --argjson extra "$extra_fields" '
         {fields: (
             {project: {key: $project},
              issuetype: {name: $type},
@@ -63,6 +81,7 @@ build_payload() {
             + (if ($labels | length) == 0 then {} else {labels: $labels} end)
             + (if $priority == "" then {} else {priority: {name: $priority}} end)
             + (if $parent == "" then {} else {parent: {key: $parent}} end)
+            + $extra
         )}'
 }
 
@@ -90,6 +109,7 @@ case "${1:-}" in
             exit 1
         fi
         DESCRIPTION=""; DESCRIPTION_FILE=""; LABELS="[]"; PRIORITY=""; PARENT=""; DRY=0
+        EXTRA_FIELDS="{}"
         # An unflagged first remaining argument is the description
         if [ $# -gt 0 ] && [ "${1#--}" = "$1" ]; then
             DESCRIPTION="$1"; shift
@@ -100,6 +120,30 @@ case "${1:-}" in
                 --priority)          PRIORITY="$2"; shift 2 ;;
                 --parent)            PARENT="$2"; shift 2 ;;
                 --description-file)  DESCRIPTION_FILE="$2"; shift 2 ;;
+                --field)
+                    FIELD_KV="$2"
+                    FIELD_KEY="${FIELD_KV%%=*}"
+                    if [ "$FIELD_KEY" = "$FIELD_KV" ] || [ -z "$FIELD_KEY" ]; then
+                        echo "Error: --field needs key=value (got '$FIELD_KV')." >&2
+                        exit 1
+                    fi
+                    FIELD_VAL="${FIELD_KV#*=}"
+                    case "$FIELD_KEY" in
+                        project|issuetype|summary|description|labels|priority|parent)
+                            echo "Error: --field cannot set '$FIELD_KEY' - use the dedicated option for it instead." >&2
+                            exit 1
+                            ;;
+                    esac
+                    # A value that parses as JSON (a number, an object like
+                    # {"id":"10000"}, an array, true/false/null) is taken as
+                    # JSON - most custom fields want a shape, not a string.
+                    # Anything else is taken as a plain string, so an
+                    # ordinary --field customfield_10050=Ops still works
+                    # without the caller having to quote it as JSON.
+                    EXTRA_FIELDS=$(printf '%s' "$EXTRA_FIELDS" | jq --arg k "$FIELD_KEY" --arg v "$FIELD_VAL" \
+                        '. + {($k): ($v | try fromjson catch $v)}')
+                    shift 2
+                    ;;
                 --dry-run)           DRY=1; shift ;;
                 *) echo "Error: unknown option '$1'." >&2; exit 1 ;;
             esac
@@ -116,7 +160,7 @@ case "${1:-}" in
         elif [ -n "$DESCRIPTION" ]; then
             DESC_ADF=$(text_to_adf "$DESCRIPTION")
         fi
-        create_issue "$(build_payload "$PROJECT" "$TYPE" "$SUMMARY" "$DESC_ADF" "$LABELS" "$PRIORITY" "$PARENT")" "$DRY"
+        create_issue "$(build_payload "$PROJECT" "$TYPE" "$SUMMARY" "$DESC_ADF" "$LABELS" "$PRIORITY" "$PARENT" "$EXTRA_FIELDS")" "$DRY"
         ;;
 
     bulk)

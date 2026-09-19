@@ -64,6 +64,8 @@ ${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh bulk <PROJECT> tickets.json [--dry-ru
 
 Only `summary` is required; `type` defaults to `Task`. Blank lines in a description become separate paragraphs - REST v3 needs Atlassian Document Format, and the script builds it, so pass plain text.
 
+**A project that requires a field this payload does not name - a custom field, or a component with no default - is not a dead end.** `create` (not `bulk`) takes `--field KEY=VALUE`, repeatable, merged into `fields` last: read the field id with `jira-meta.sh fields <PROJECT> <TYPE>` first, then `--field customfield_10050=Ops` or `--field components='[{"name":"Backend"}]'` for anything that needs a shape rather than a string - a value that parses as JSON is sent as JSON, anything else as plain text. It refuses to set the seven fields the dedicated options already cover (`project`, `issuetype`, `summary`, `description`, `labels`, `priority`, `parent`) - use those instead.
+
 **Use `--dry-run` first on anything bulk.** It prints the exact payload and sends nothing.
 
 Every successful create prints the issue key and its browse URL.

@@ -190,6 +190,7 @@ cd ~/.claude/skills/jira/scripts
 
 ./jira-issues.sh create PAY Task "Summary" "Description" --label infra --priority High
 ./jira-issues.sh create PAY Task "Summary" --description-file /tmp/desc.html
+./jira-issues.sh create PAY Task "Summary" --field customfield_10050=Ops
 ./jira-issues.sh bulk PAY tickets.json --dry-run
 ./jira-issues.sh get PAY-12
 ./jira-issues.sh search "assignee = currentUser() AND statusCategory != Done"
@@ -198,6 +199,13 @@ cd ~/.claude/skills/jira/scripts
 
 Issue type names are per-project. `Task` in one project may be `Story` or
 `Work Item` in another, so read `types` rather than assuming.
+
+`create` takes `--field KEY=VALUE` (repeatable) for anything the built-in
+options do not cover - a project-specific required field, or a component
+with no default. Read the field id with `jira-meta.sh fields` first. A
+value that parses as JSON is sent as JSON (`--field components='[{"name":"Backend"}]'`);
+anything else goes as plain text. `bulk` has no equivalent - its file format
+only covers the seven built-in fields.
 
 `bulk` takes a JSON array. Only `summary` is required; `type` defaults to
 `Task`. **Run it with `--dry-run` first** - that prints the exact payload for
