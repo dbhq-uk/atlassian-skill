@@ -42,8 +42,9 @@ for src in "$SCRIPT_DIR"/skills/*/; do
   # Only ever remove a symlink here, never a real directory - a target that
   # exists and is NOT a symlink is left alone with an error rather than
   # silently rm -rf'd, in case it is the user's own same-named directory
-  # rather than a prior install of this skill. install-codex.sh already
-  # gets this right for its own skill directories; this matches it.
+  # rather than a prior install of this skill. install-codex.sh's _shared
+  # branch does the same whole-directory symlink and carries this same
+  # guard, for the same reason.
   if [ -e "$target" ] && [ ! -L "$target" ]; then
     echo "Error: $target already exists and is not a symlink - not touching it." >&2
     echo "Fix: move or remove it yourself, then re-run this installer." >&2

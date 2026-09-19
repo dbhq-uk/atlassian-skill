@@ -44,7 +44,16 @@ for src in "$SCRIPT_DIR"/skills/*/; do
   # would fail on the file every other directory here has and this one does
   # not.
   if [ ! -f "$src/SKILL.md" ]; then
-    rm -rf "$target"
+    # Same whole-directory symlink install.sh does for every directory
+    # (see its own comment) - so it needs the same guard: only ever remove
+    # a symlink here, never a real directory, in case $target is the
+    # user's own same-named directory rather than a prior install.
+    if [ -e "$target" ] && [ ! -L "$target" ]; then
+      echo "Error: $target already exists and is not a symlink - not touching it." >&2
+      echo "Fix: move or remove it yourself, then re-run this installer." >&2
+      exit 1
+    fi
+    rm -f "$target"
     ln -sfn "$src" "$target"
     continue
   fi
