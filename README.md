@@ -150,13 +150,16 @@ and the same measurement now passes cleanly.
 This is a separate guard from `--base-version`, which `update` also always
 requires: `--base-version` refuses a write if the page has moved on since
 the version you read, an optimistic-concurrency check unrelated to whether
-the content round-trips at all. The two can refuse the same command for two
+the content round-trips at all.
+
+The two can refuse the same command for two
 different reasons - a stale version, or content this converter cannot carry
 through unchanged - and both are named here because this is the section a
 refusal on either sends you to.
 
 The usual cause is an earlier direct edit in the Confluence web editor, which
 writes a node, an attribute or a mark this converter has no HTML+ form for.
+
 This is not a bug and there is no workaround: **there is no `--force`
 anywhere in this skill family.** A refusal here means a human resolves it in
 the Confluence UI first, not that the skill retries harder.
@@ -204,14 +207,18 @@ Issue type names are per-project. `Task` in one project may be `Story` or
 
 `create` takes `--field KEY=VALUE` (repeatable) for anything the built-in
 options do not cover - a project-specific required field, or a component
-with no default. Read the field id with `jira-meta.sh fields` first. A
+with no default. Read the field id with `jira-meta.sh fields` first.
+
+A
 value that parses as JSON is sent as JSON (`--field components='[{"name":"Backend"}]'`);
 anything else goes as plain text. `bulk` has no equivalent - its file format
 only covers the seven built-in fields.
 
 `bulk` takes a JSON array. Only `summary` is required; `type` defaults to
 `Task`. **Run it with `--dry-run` first** - that prints the exact payload for
-every issue and sends nothing. A batch paces itself at one request a second
+every issue and sends nothing.
+
+A batch paces itself at one request a second
 to stay inside Jira's limit of roughly 60 a minute, and reports `Created:` and
 `Failed:` counts at the end. A partial failure leaves the successful issues in
 place, because there is no rollback: the skill cannot delete.
@@ -252,6 +259,7 @@ line goes to stderr, not stdout, so `read 1234567 > /tmp/current.html` still
 shows it on your terminal while the redirect captures a clean fragment - one
 you can splice a change into and pass straight to `update --body-file`, with
 no header line ahead of it to reject as loose text.
+
 `update` always needs that `--base-version` - see [§ A known limit](#a-known-limit-the-round-trip-gate)
 for what it protects against and what it does not.
 
@@ -284,7 +292,9 @@ task lists.
 
 A panel, a status lozenge, a decision list, a layout and a column width have
 no markdown syntax at all - write them as raw HTML+ on its own line, which
-markdown permits and this skill passes through untouched. The same markup
+markdown permits and this skill passes through untouched.
+
+The same markup
 embedded mid-sentence in running prose is not detected as a tag and is
 escaped to visible text instead - give an inline component its own line.
 
