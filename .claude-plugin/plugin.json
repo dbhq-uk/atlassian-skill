@@ -1,7 +1,6 @@
 {
   "name": "atlassian",
   "description": "Jira and Confluence from your agent, over the REST API with an API token and no MCP server. Create and read Jira issues; search, read, create and update Confluence pages; publish a repository's markdown to a space. Bodies are authored as Confluence HTML+ and converted to ADF locally, so panels, status lozenges and task lists survive. Create and read only: no delete.",
-  "version": "2.0.0",
   "author": {
     "name": "DBHQ",
     "email": "dan@dbhq.uk"
