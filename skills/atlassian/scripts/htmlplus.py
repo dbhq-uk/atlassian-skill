@@ -466,9 +466,15 @@ class _Builder(HTMLParser):
     scope, so text picks up every mark wrapping it rather than only the nearest.
     """
 
-    def __init__(self):
+    def __init__(self, parent="doc"):
         super().__init__(convert_charrefs=True)
-        self.doc = {"type": "doc", "version": 1, "content": []}
+        # parent is the node the fragment will sit in. It is the document
+        # for a whole body; for a fragment spliced into a page by local id
+        # it is the real parent there, so the nesting check (and the choice
+        # between expand and nestedExpand) judges the fragment where it will
+        # actually land.
+        self.doc = ({"type": "doc", "version": 1, "content": []} if parent == "doc"
+                    else {"type": parent, "content": []})
         self.blocks = [self.doc]
         self.marks = []
         self._pending_status = None
@@ -1373,8 +1379,12 @@ class _Builder(HTMLParser):
         self._append(node)
 
 
-def html_to_adf(fragment):
-    """Convert an HTML+ fragment to an ADF document dict."""
+def html_to_adf(fragment, parent="doc"):
+    """Convert an HTML+ fragment to an ADF document dict.
+
+    With parent set to another node type, the result is that node holding
+    the fragment's nodes as its content, checked as that node's children.
+    """
     # Three backticks inside a code block are content - a block showing
     # markdown has them - so only a fence outside <pre> is refused.
     if "```" in re.sub(r"<pre\b.*?</pre>", "", fragment, flags=re.S | re.I):
@@ -1382,7 +1392,7 @@ def html_to_adf(fragment):
             "Markdown code fence found. Send the HTML+ body on its own, with "
             "no code fence around it."
         )
-    builder = _Builder()
+    builder = _Builder(parent)
     builder.feed(fragment)
     builder.close()
     unclosed = None

@@ -62,7 +62,7 @@ same reason instead.
 **3. Check before you write.** Jira: the project key, the issue type and the
 required fields are read from the live Jira before a create call is built -
 issue type names are per-project, so read `types` rather than assuming.
-Confluence: `update` requires `--base-version <n>` - the version the edit was
+Confluence: `update` and `edit` require `--base-version <n>` - the version the edit was
 composed against - with no default and no inference. It re-reads the page's
 live version immediately before writing and compares that against
 `--base-version`; if they differ, it refuses rather than overwriting. The
@@ -120,7 +120,10 @@ converter has never modelled at all, or a table a person left genuinely
 inconsistent. That is expected behaviour on a page with editing history
 outside this pipeline, not a sign anything is broken, and it is not a bug to
 route around: there is no `--force` anywhere in this skill, on
-either script.
+either script. `confluence-pages.sh edit` narrows the gate rather than
+bypassing it: it converts only the fragment and splices it in by local id,
+so the rest of the page never goes through the converter and only the
+block being replaced has to survive the round trip.
 
 **7. No packages, no venv, no credential in the repo.** Bash plus `curl` and
 `jq`; Python 3 standard library only. Nothing is installed at runtime.
