@@ -308,9 +308,17 @@ confluence:
 `page_id` is written back on the first publish - **commit that change**, or
 the next run creates a second page instead of updating the first.
 
-Headings, paragraphs, lists, tables, links, inline marks and fenced code
-blocks convert cleanly, and GFM task lists (`- [ ]`) become real Confluence
-task lists.
+These markdown constructs convert: headings (`#`, or underlined), paragraphs
+with hard line breaks, bullet and numbered lists (a numbered list keeps its
+start number), GFM task lists (`- [ ]`, which become real Confluence task
+lists), tables, blockquotes, fenced code blocks with ```` ``` ```` or `~~~`,
+thematic breaks, links and `<https://...>` autolinks, bold, italic,
+strikethrough and inline code in either the `*` or `_` form, backslash
+escapes, and an image at an absolute URL on a line of its own.
+
+Anything else - a relative image, an image inside a sentence, a reference-style
+link or footnote, an indented code block - is refused by name rather than
+published as literal markdown.
 
 A panel, a status lozenge, a decision list, a layout and a column width have
 no markdown syntax at all - write them as raw HTML+ on its own line, which

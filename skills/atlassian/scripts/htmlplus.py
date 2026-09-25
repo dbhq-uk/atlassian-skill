@@ -16,6 +16,7 @@ import argparse
 import base64
 import json
 import pathlib
+import re
 import sys
 from html.parser import HTMLParser
 
@@ -1105,19 +1106,33 @@ class _Builder(HTMLParser):
             self._open({"type": "mediaSingle", "attrs": attrs_out})
 
         elif tag == "div" and dtype == "media":
-            _refuse_unknown_attrs(tag, dtype, a, {"data-type", "data-id", "data-collection", "data-media-type", "data-alt", "data-width", "data-height"} | _LOCAL_ID)
-            media_id = a.get("data-id", "")
-            collection = a.get("data-collection", "")
-            if not media_id or not collection:
-                raise ConversionError(
-                    "A media node needs both data-id and data-collection. "
-                    "Both come from attachments.sh upload - never invent one."
-                )
-            node_attrs = {
-                "id": media_id,
-                "type": a.get("data-media-type", "file"),
-                "collection": collection,
-            }
+            _refuse_unknown_attrs(tag, dtype, a, {"data-type", "data-id", "data-collection", "data-media-type", "data-alt", "data-width", "data-height", "data-url"} | _LOCAL_ID)
+            if a.get("data-media-type") == "external":
+                # An image served from its own URL rather than attached to
+                # the page - what a markdown ![alt](https://...) becomes.
+                url = a.get("data-url") or ""
+                if not url.startswith(("https://", "http://")) \
+                        or "data-id" in a or "data-collection" in a:
+                    raise ConversionError(
+                        'An external media node needs data-url, an absolute '
+                        'http or https URL, and no data-id or data-collection.'
+                    )
+                node_attrs = {"type": "external", "url": url}
+            else:
+                media_id = a.get("data-id", "")
+                collection = a.get("data-collection", "")
+                if not media_id or not collection or "data-url" in a:
+                    raise ConversionError(
+                        "A media node needs both data-id and data-collection. "
+                        "Both come from attachments.sh upload - never invent one. "
+                        'An image at a URL takes data-media-type="external" and '
+                        "data-url instead."
+                    )
+                node_attrs = {
+                    "id": media_id,
+                    "type": a.get("data-media-type", "file"),
+                    "collection": collection,
+                }
             if "data-alt" in a:
                 node_attrs["alt"] = a["data-alt"]
             # width/height/localId are optional and round-trip only - there
@@ -1360,7 +1375,9 @@ class _Builder(HTMLParser):
 
 def html_to_adf(fragment):
     """Convert an HTML+ fragment to an ADF document dict."""
-    if "```" in fragment:
+    # Three backticks inside a code block are content - a block showing
+    # markdown has them - so only a fence outside <pre> is refused.
+    if "```" in re.sub(r"<pre\b.*?</pre>", "", fragment, flags=re.S | re.I):
         raise ConversionError(
             "Markdown code fence found. Send the HTML+ body on its own, with "
             "no code fence around it."
@@ -1467,7 +1484,8 @@ _INLINE_LEAF_TYPES = {"text", "status", "date", "inlineCard", "hardBreak"}
 # render, and check_roundtrip catches it as "safe to read, not safe to
 # rewrite" if it ever somehow didn't.
 _MEDIA_SINGLE_ATTRS = {"layout", "width", "widthType"}
-_MEDIA_ATTRS = {"id", "type", "collection", "alt", "width", "height", "localId"}
+_MEDIA_ATTRS = {"id", "type", "collection", "alt", "width", "height", "localId",
+                "url"}
 _CAPTION_ATTRS = {"localId"}
 
 
@@ -1995,8 +2013,22 @@ def _node_to_html(node, parent="doc"):
             bits.append(f'data-width-type="{_escape_attr(a["widthType"])}"')
         return (f'<figure data-type="media-single" {" ".join(bits)}>'
                 f"{_children_html(node)}</figure>")
+    if t == "media" and a.get("type") == "external" and "url" in a \
+            and "id" not in a and "collection" not in a:
+        bits = ['data-media-type="external"',
+                f'data-url="{_escape_attr(a["url"])}"']
+        if "alt" in a:
+            bits.append(f'data-alt="{_escape_attr(a["alt"])}"')
+        if "width" in a:
+            bits.append(f'data-width="{_format_number(a["width"])}"')
+        if "height" in a:
+            bits.append(f'data-height="{_format_number(a["height"])}"')
+        local_id_bit = _local_id_attr(a).strip()
+        if local_id_bit:
+            bits.append(local_id_bit)
+        return f'<div data-type="media" {" ".join(bits)}></div>'
     if t == "media" and a.get("type", "file") == "file" \
-            and "id" in a and "collection" in a:
+            and "id" in a and "collection" in a and "url" not in a:
         # Named support only for the shape this converter can represent
         # completely: a file attachment with an id and a collection - what
         # attachments.sh upload actually produces. The attrs-completeness
@@ -2145,6 +2177,8 @@ def _node_to_md(node, depth=0):
         # is what an attachment actually is; url as the fallback for that
         # shape, so reading an external image still names something rather
         # than "attachment:None".
+        if a.get("type") == "external" and "url" in a:
+            return f'![{a.get("alt", "image")}]({a["url"]})'
         ref = a.get("id") or a.get("url", "unknown")
         return f'![{a.get("alt", "image")}](attachment:{ref})'
     if t == "caption":

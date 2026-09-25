@@ -555,5 +555,94 @@ class TestMarkdownToHtmlPlus(unittest.TestCase):
         )
 
 
+
+class TestEveryMarkdownConstructConvertsOrIsRefused(unittest.TestCase):
+    """One row per common markdown construct. Each either converts to real
+    HTML+ that htmlplus.py accepts, or is refused with a message naming it.
+    None may reach the page as literal markdown - "> quote" or "~~strike~~"
+    shown to readers - which is what used to happen to most of them."""
+
+    # (name, markdown, what the HTML+ must contain, marker that must not
+    # survive as text). None in the third place means refused, and the
+    # fourth is then a word the refusal must contain.
+    ROWS = [
+        ("blockquote", "> quote\n", "<blockquote><p>quote</p></blockquote>", "&gt;"),
+        ("blockquote, two paragraphs", "> one\n>\n> two\n",
+         "<blockquote><p>one</p><p>two</p></blockquote>", "&gt;"),
+        ("list in a blockquote", "> - a\n> - b\n",
+         "<blockquote><ul><li><p>a</p></li>", "&gt;"),
+        ("image, absolute URL", "![Context](https://example.com/a.png)\n",
+         'data-url="https://example.com/a.png" data-alt="Context"', "!["),
+        ("thematic break ---", "One.\n\n---\n\nTwo.\n", "<p>One.</p><hr><p>Two.</p>", "---"),
+        ("thematic break ***", "One.\n\n***\n\nTwo.\n", "<hr>", "***"),
+        ("thematic break ___", "One.\n\n___\n\nTwo.\n", "<hr>", "___"),
+        ("setext heading =", "Title\n=====\n", "<h1>Title</h1>", "==="),
+        ("setext heading -", "Title\n-----\n", "<h2>Title</h2>", "---"),
+        ("strikethrough", "~~gone~~\n", "<s>gone</s>", "~~"),
+        ("underscore emphasis", "an _em_ word\n", "<em>em</em>", "_em_"),
+        ("underscore strong", "a __bold__ word\n", "<strong>bold</strong>", "__"),
+        ("snake_case is not emphasis", "call snake_case_name now\n",
+         "snake_case_name", "<em>"),
+        ("~~~ fence", "~~~\nx = 1\n~~~\n", "<pre><code", "~~~"),
+        ("~~~ fence holding backticks", "~~~markdown\n```\nx\n```\n~~~\n",
+         '<code class="language-markdown">```', "~~~"),
+        ("list start number", "3. three\n4. four\n", '<ol start="3">', "3."),
+        ("list with ) delimiter", "1) one\n2) two\n", "<ol><li><p>one</p>", "1)"),
+        ("+ bullet", "+ one\n+ two\n", "<ul><li><p>one</p>", "+ "),
+        ("hard break, two spaces", "line one  \nline two\n", "line one<br>line two", "  "),
+        ("hard break, backslash", "line one\\\nline two\n", "line one<br>line two", "\\"),
+        ("autolink mid-sentence", "See <https://example.com> now\n",
+         '<a href="https://example.com">https://example.com</a>', "&lt;"),
+        ("autolink on its own line", "<https://example.com>\n",
+         '<p><a href="https://example.com">', "&lt;"),
+        ("email autolink", "Mail <help@example.com>\n",
+         '<a href="mailto:help@example.com">', "&lt;"),
+        ("backslash escapes", "\\*not em\\* and \\_not em\\_\n",
+         "*not em* and _not em_", "<em>"),
+        ("heading closing hashes", "# Title #\n", "<h1>Title</h1>", "#"),
+        # Refused, by name.
+        ("relative image", "![Context](img/a.png)\n", None, "Relative image"),
+        ("image inside a sentence", "See ![x](https://example.com/a.png) here\n",
+         None, "Image inside a line of text"),
+        ("image with a title", '![x](https://example.com/a.png "t")\n', None, "title"),
+        ("link reference definition", "[ref]: https://example.com\n", None,
+         "Link reference definition"),
+        ("footnote", "[^1]: A note.\n", None, "Footnote"),
+        ("indented code block", "Para.\n\n    code\n", None, "indented code block"),
+        ("nested blockquote", "> > deep\n", None, "blockquote cannot contain a blockquote"),
+        ("heading in a blockquote", "> # Title\n", None, "blockquote cannot contain a heading"),
+    ]
+
+    def test_every_row(self):
+        import re as _re
+        sys.path.insert(0, str(SCRIPTS))
+        from htmlplus import ConversionError as HtmlPlusError, html_to_adf
+
+        for name, source, expected, marker in self.ROWS:
+            with self.subTest(construct=name):
+                try:
+                    out = md_to_htmlplus(source)
+                    html_to_adf(out)
+                except (ConversionError, HtmlPlusError) as exc:
+                    self.assertIsNone(expected, f"{name} was refused: {exc}")
+                    self.assertIn(marker, str(exc))
+                    continue
+                self.assertIsNotNone(expected, f"{name} converted: {out}")
+                self.assertIn(expected, out)
+                if marker.startswith("<"):
+                    self.assertNotIn(marker, out)
+                else:
+                    text = _re.sub(r"<[^>]+>", "", out)
+                    self.assertNotIn(marker, text, f"{name} left {marker!r} as text: {out}")
+
+    def test_a_relative_image_is_refused_as_an_image_not_a_link(self):
+        with self.assertRaises(ConversionError) as ctx:
+            md_to_htmlplus("![diagram](diagrams/context.png)\n")
+        message = str(ctx.exception)
+        self.assertIn("image", message)
+        self.assertIn("attachments.sh", message)
+        self.assertNotIn("Relative link", message)
+
+
 if __name__ == "__main__":
     unittest.main()
