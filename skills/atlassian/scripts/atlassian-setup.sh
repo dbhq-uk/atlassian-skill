@@ -1,6 +1,6 @@
 #!/bin/bash
-# Atlassian setup - store and verify one Atlassian Cloud credential for jira,
-# confluence and confluence-publish.
+# Atlassian setup - store and verify the one Atlassian Cloud credential every
+# script in this skill uses, for Jira and Confluence alike.
 
 set -e
 
@@ -122,7 +122,7 @@ if [ "$STATUS" != "200" ]; then
     CONFLUENCE="no"
     echo "Warning: no Confluence access (HTTP $STATUS)." >&2
     echo "Cause: this account has no Confluence licence on $SITE, or the site has no Confluence." >&2
-    echo "Fix: jira will work. confluence and confluence-publish will not until that is granted." >&2
+    echo "Fix: the Jira commands will work. The Confluence commands and publish.sh will not until that is granted." >&2
 fi
 
 # --- Write with restrictive permissions ---
@@ -161,4 +161,4 @@ echo "Connected as $NAME ($ACCOUNT)."
 echo "Jira: yes.  Confluence: $CONFLUENCE."
 echo "Saved to $CONFIG_FILE (permissions 600)."
 echo
-echo "Next: $SCRIPT_DIR/../../jira/scripts/jira-meta.sh projects"
+echo "Next: $SCRIPT_DIR/jira-meta.sh projects"

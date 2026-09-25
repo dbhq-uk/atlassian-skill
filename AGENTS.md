@@ -4,33 +4,39 @@ Guidance for AI agents (and people) working in this repository.
 
 ## What this is
 
-**atlassian** - three agent skills that talk to an Atlassian Cloud site over
-its REST API, on one credential and with no MCP server. `jira` creates and
-reads issues, `confluence` searches, reads, creates and updates pages, and
-`confluence-publish` turns a repository's markdown into pages in a space.
-They follow the [Agent Skills](https://agentskills.io) layout
-(`skills/<name>/SKILL.md`) and ship as a
-[Claude Code plugin](https://code.claude.com/docs/en/plugins).
+**atlassian** - one agent skill that talks to an Atlassian Cloud site over
+its REST API, on one credential and with no MCP server. It creates and reads
+Jira issues, searches, reads, creates and updates Confluence pages, and
+publishes a repository's markdown file to a page. It follows the
+[Agent Skills](https://agentskills.io) layout (`skills/<name>/SKILL.md`) and
+ships as a [Claude Code plugin](https://code.claude.com/docs/en/plugins).
 
 ## Layout
 
 ```
 .claude-plugin/plugin.json          # plugin manifest
-skills/_shared/scripts/             # one credential helper, one setup, one converter
-skills/_shared/references/          # house style, HTML+ patterns, pre-publish checklist
-skills/_shared/tests/               # converter and repo-constraint tests
-skills/jira/                        # issues
-skills/confluence/                  # pages
-skills/confluence-publish/          # markdown to pages
+skills/atlassian/SKILL.md           # the router: setup, the rules, which reference to load
+skills/atlassian/references/        # jira.md, confluence.md, publish.md, plus house
+                                    #   style, HTML+ patterns, checklist and STE
+skills/atlassian/scripts/           # every script: setup, the converter, Jira,
+                                    #   Confluence and publish
+skills/atlassian/tests/             # converter, publish and repo-constraint tests
 install.sh / install-codex.sh       # local symlink installers (Claude / Codex)
 ```
 
-`_shared` is not a skill - it has no `SKILL.md`. It is the directory the three
-skills reach as `${CLAUDE_SKILL_DIR}/../_shared/`. `install-codex.sh` treats
-it differently for exactly that reason: every other directory under `skills/`
-gets its `SKILL.md` rewritten at install time, and `_shared` has none to
-rewrite, so it is symlinked whole instead - the way `install.sh` already
-handles every directory for Claude Code.
+**The skill folder is self-contained, and must stay that way.** `npx skills
+add` copies only a folder that holds a `SKILL.md`. Until 25 September 2026
+this repository shipped three skills (`jira`, `confluence` and
+`confluence-publish`) that reached a fourth folder, `_shared`, with `../`.
+`_shared` had no `SKILL.md`, so it never arrived and every script failed on
+its first line. Nothing under `skills/atlassian/` may reach outside it with
+`../` - CI fails on one, and `TestTheSkillStandsAlone` runs the scripts from a
+copy of that folder alone.
+
+`SKILL.md` is always loaded, so it stays short: setup, the rules and when not
+to use the skill. The commands live in `references/jira.md`,
+`references/confluence.md` and `references/publish.md`, which the agent reads
+for the task in hand.
 
 ## The constraints that must not be broken
 
@@ -40,7 +46,7 @@ Everything else here is a preference. These are not.
 not a page, not an issue, not an attachment, not a space. No bulk transition,
 no project or space administration. `jira bulk` keeps `--dry-run`. A partial
 failure leaves the successful work in place, and that is stated rather than
-hidden, because the skills have no way to roll back. Anything destructive
+hidden, because the skill has no way to roll back. Anything destructive
 stays a human job in the Atlassian UI. `test_constraints.py`'s
 `TestNoDestructiveVerb` asserts no script issues a `DELETE`.
 
@@ -48,7 +54,7 @@ stays a human job in the Atlassian UI. `test_constraints.py`'s
 credentials and the method from a 0600 config file, so the token stays out of
 `ps` output and out of shell history. Never pass it as an argument, never
 interpolate it into a URL, and never echo it. This holds for the multipart
-attachment upload too (`confluence-publish/scripts/attachments.sh`) - it
+attachment upload too (`scripts/attachments.sh`) - it
 cannot go through the shared `api()` helper, because a file upload needs
 `curl -F`, not a JSON body, so it builds its own `-K` config file for the
 same reason instead.
@@ -90,7 +96,7 @@ the page.
 
 **6. A write that cannot be round-tripped is refused, not attempted, and
 there is no `--force`.** Before `confluence-pages.sh update` (and
-`confluence-publish`'s `publish.sh`, which calls it) sends anything, it
+`publish.sh`, which calls it) sends anything, it
 converts the page's current live content back through the converter and
 checks the result matches (Python value equality on the ADF, not a byte- or
 string-identical comparison - `1800.0 == 1800` is equal, and correctly so).
@@ -109,7 +115,7 @@ cleanly; what still refuses is narrower - a node type or attribute this
 converter has never modelled at all, or a table a person left genuinely
 inconsistent. That is expected behaviour on a page with editing history
 outside this pipeline, not a sign anything is broken, and it is not a bug to
-route around: there is no `--force` anywhere in this skill family, on
+route around: there is no `--force` anywhere in this skill, on
 either script.
 
 **7. No packages, no venv, no credential in the repo.** Bash plus `curl` and
@@ -119,21 +125,21 @@ either script.
 house style. `test_constraints.py` fails the build on a client name, a
 security-proxy host, a real-looking ticket id, an IP address, or a source
 proper noun that slipped past those shapes. A user's own conventions go in
-`~/.dbhq/atlassian/house-style.md`, outside the repository - and every write
-path's `SKILL.md` is required to say so (`TestHouseStyleIsOnTheWritePath`).
+`~/.dbhq/atlassian/house-style.md`, outside the repository - and `SKILL.md`
+and every write reference are required to say so
+(`TestHouseStyleIsOnTheWritePath`).
 
 ## Conventions
 
-- Any path `SKILL.md` names goes through `${CLAUDE_SKILL_DIR}`, which Claude Code
-  substitutes for personal, project and plugin installs alike. **Never hardcode
-  `~/.claude/skills/jira` (or `confluence`, or `confluence-publish`) or any
+- Any path `SKILL.md` or a reference names goes through `${CLAUDE_SKILL_DIR}`,
+  which Claude Code substitutes in `SKILL.md` for personal, project and plugin
+  installs alike. **Never hardcode `~/.claude/skills/atlassian` or any
   absolute path** - it is wrong under a Codex install and wrong under a plugin
-  install. `install-codex.sh` rewrites the variable at install time for each of
-  the three skills, because Codex does not substitute it; `_shared` carries no
-  `SKILL.md` of its own, so it is symlinked whole instead of stepped through
-  that rewrite (see Layout, above).
-- `SKILL.md` is the short half on purpose. The workflow, the constraints and the
-  checks live there; the reasoning and the reference material live in
+  install. `install-codex.sh` rewrites the variable in `SKILL.md` at install
+  time, because Codex does not substitute it. The references are symlinked,
+  not rewritten, so `SKILL.md` tells the agent what the placeholder means.
+- `SKILL.md` is the short half on purpose. The setup and the rules live there;
+  the commands, the reasoning and the reference material live in
   `references/` and are read on demand.
 - Shell scripts use `set -e`; errors go to stderr, output to stdout.
 - Every example is generic: `PAY-12`, `mycompany.atlassian.net`. `test_constraints.py`
@@ -148,19 +154,18 @@ path's `SKILL.md` is required to say so (`TestHouseStyleIsOnTheWritePath`).
 ## Validating a change
 
 ```bash
-cd ~/dbhq-uk/atlassian-skill
 for s in skills/*/scripts/*.sh install.sh install-codex.sh; do bash -n "$s"; shellcheck -S warning -x "$s"; done
-python3 -m unittest discover -s skills/_shared/tests -v
-python3 -m unittest discover -s skills/confluence-publish/tests -v
+python3 -m unittest discover -s skills/atlassian/tests -v
 for p in skills/*/scripts/*.py; do python3 -m py_compile "$p"; done
 jq empty .claude-plugin/plugin.json
 ```
 
 `-x` on shellcheck follows the `# shellcheck source=` directives that pull in
-`_shared/scripts/_common.sh`, which it cannot do without it.
+`_common.sh`, which it cannot do without it.
 
 CI runs the Python test suite and the constraint gate above (`.github/workflows/validate.yml`,
-job `validate`), plus a repository-wide shellcheck and `ruff --select E9,F` pass over every
+job `validate`), a check that nothing under `skills/` reaches outside its folder
+with `../`, plus a repository-wide shellcheck and `ruff --select E9,F` pass over every
 script (job `lint`, shared across every DBHQ skill repo - see that job's own comment for why it
 is scoped the way it is) and the SKILL.md frontmatter check.
 
@@ -178,3 +183,10 @@ that same morning: a repository holds the skills that change together. Jira
 Cloud and Confluence Cloud take the same site URL, the same account email and
 the same API token, so they share a credential store and a setup script.
 GitHub redirects `dbhq-uk/jira-skill` indefinitely.
+
+On 25 September 2026 the three skills became one, `atlassian`, with `publish`
+as a task inside it rather than a skill of its own. The `npx skills add`
+install had never worked (see Layout), and `confluence` and
+`confluence-publish` both triggered on "publish this to confluence", so the
+host could not tell which to load. The plugin name, the settings directory
+and every script's behaviour did not change.

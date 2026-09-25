@@ -1,6 +1,5 @@
 #!/bin/bash
-# Install the jira, confluence and confluence-publish skills into
-# ~/.claude/skills/ as live symlinks.
+# Install the atlassian skill into ~/.claude/skills/ as a live symlink.
 #
 # A SKILL.md references its scripts via ${CLAUDE_SKILL_DIR}, which Claude Code
 # substitutes to the skill's own directory for personal, project, and plugin
@@ -36,8 +35,28 @@ else
 fi
 echo
 
-# --- Install the skill as a full-directory symlink ---
+# --- Retire the old layout ---
+# Until 25 Sep 2026 this repository shipped three skills - jira, confluence
+# and confluence-publish - and a _shared folder all three reached with ../.
+# They are one skill now, atlassian. An earlier run of this installer left a
+# symlink for each of the four, pointing at a folder that no longer exists,
+# so it would linger as a dangling duplicate an agent may still match.
+# Only a symlink to one of those old folders is removed. jira and confluence
+# are ordinary names, so a real directory or a link anywhere else is the
+# user's own and is left alone.
 mkdir -p "$SKILLS_ROOT"
+for old in jira confluence confluence-publish _shared; do
+  target="$SKILLS_ROOT/$old"
+  [ -L "$target" ] || continue
+  case "$(readlink "$target")" in
+    */skills/"$old")
+      echo "Removing '$old' - it is part of the atlassian skill now"
+      rm -f "$target"
+      ;;
+  esac
+done
+
+# --- Install the skill as a full-directory symlink ---
 for src in "$SCRIPT_DIR"/skills/*/; do
   src="${src%/}"
   name="$(basename "$src")"
@@ -46,9 +65,7 @@ for src in "$SCRIPT_DIR"/skills/*/; do
   # Only ever remove a symlink here, never a real directory - a target that
   # exists and is NOT a symlink is left alone with an error rather than
   # silently rm -rf'd, in case it is the user's own same-named directory
-  # rather than a prior install of this skill. install-codex.sh's _shared
-  # branch does the same whole-directory symlink and carries this same
-  # guard, for the same reason.
+  # rather than a prior install of this skill.
   if [ -e "$target" ] && [ ! -L "$target" ]; then
     echo "Error: $target already exists and is not a symlink - not touching it." >&2
     echo "Fix: move or remove it yourself, then re-run this installer." >&2

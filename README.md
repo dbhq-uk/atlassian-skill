@@ -16,18 +16,23 @@ A free, open-source tool by [DBHQ](https://dbhq.uk) - documented at [skills.dbhq
 
 ---
 
-Three agent skills for Atlassian Cloud, on one credential and with no MCP server:
+One agent skill for Atlassian Cloud, on one credential and with no MCP server.
+It does three jobs:
 
-- **`jira`** creates and reads Jira Cloud issues over the REST API v3. Ask your
+- **Jira**: creates and reads Jira Cloud issues over the REST API v3. Ask your
   agent to raise a ticket and it does, after checking the project key, the
   issue type and the required fields against your Jira first, so the create
   call is right the first time.
-- **`confluence`** searches, reads, creates and updates Confluence Cloud pages
+- **Confluence**: searches, reads, creates and updates Confluence Cloud pages
   over the v2 REST API - with a stale-write guard on every update.
-- **`confluence-publish`** turns a repository's markdown into Confluence pages,
+- **Publish**: turns a repository's markdown file into a Confluence page,
   idempotently, with the page id written back into the file's own frontmatter.
 
-**They create, read and update only.** There is no delete anywhere, no bulk
+The skill's `SKILL.md` is short. It holds the setup and the rules, and sends
+the agent to the reference for the job in hand: `references/jira.md`,
+`references/confluence.md` or `references/publish.md`.
+
+**It creates, reads and updates only.** There is no delete anywhere, no bulk
 transition, and no project or space administration. Anything destructive stays
 a human job in the Atlassian UI.
 
@@ -47,7 +52,9 @@ npx skills add dbhq-uk/atlassian-skill
 ```
 
 The [skills.sh](https://skills.sh) CLI installs into whichever agent directories
-it finds, so this works outside Claude Code and Codex too.
+it finds, so this works outside Claude Code and Codex too. It copies the one
+`skills/atlassian` folder, which carries every script and reference the skill
+uses.
 
 ### Local install (Claude Code or Codex)
 
@@ -64,6 +71,20 @@ whole skill directory is symlinked untouched, while Codex does not, so its
 `SKILL.md` is rewritten at install time. Re-run the Codex one after editing
 `SKILL.md`.
 
+### Upgrading from the three-skill layout
+
+Until 25 September 2026 this repository installed three skills - `jira`,
+`confluence` and `confluence-publish` - and a `_shared` folder. They are one
+skill now, `atlassian`. Your credential in `~/.dbhq/atlassian` does not move.
+
+- **Plugin install:** update the plugin. Nothing else to do.
+- **Local install:** pull, then re-run `./install.sh` or `./install-codex.sh`.
+  Each removes what it installed for the old layout, and leaves alone any
+  `jira` or `confluence` folder it did not make.
+- **`npx skills add`:** that install never worked with the old layout. Remove
+  the `jira`, `confluence` and `confluence-publish` folders it left, then run
+  it again.
+
 ### Requirements
 
 `jq`, `curl`, `column` (the discovery commands' table output - `bsdextrautils`
@@ -74,12 +95,11 @@ you can create an API token on.
 
 ## Setup
 
-One credential authenticates all three skills, because Jira Cloud and Confluence
-Cloud on the same site take the same site URL, the same account email and the
-same API token:
+One credential serves Jira and Confluence alike, because both on the same site
+take the same site URL, the same account email and the same API token:
 
 ```bash
-~/.claude/skills/_shared/scripts/atlassian-setup.sh
+~/.claude/skills/atlassian/scripts/atlassian-setup.sh
 ```
 
 It asks for three things: your site URL (`https://you.atlassian.net`), the email
@@ -131,7 +151,7 @@ code block and real checkboxes, rather than a wall of plain text.
 
 ## A known limit: the round-trip gate
 
-`confluence update` and `confluence-publish` both refuse to overwrite a page
+`confluence-pages.sh update` and `publish.sh` both refuse to overwrite a page
 whose current content this converter cannot read back unchanged - value
 equality on the parsed ADF, not a byte-identical comparison.
 
@@ -161,7 +181,7 @@ The usual cause is an earlier direct edit in the Confluence web editor, which
 writes a node, an attribute or a mark this converter has no HTML+ form for.
 
 This is not a bug and there is no workaround: **there is no `--force`
-anywhere in this skill family.** A refusal here means a human resolves it in
+anywhere in this skill.** A refusal here means a human resolves it in
 the Confluence UI first, not that the skill retries harder.
 
 Two things soften this rather than hide it:
@@ -173,7 +193,7 @@ Two things soften this rather than hide it:
   refused 35 of 40 real pages sampled from a live site; a *known* type that
   would otherwise drop an attribute it cannot represent degrades the same
   way, to an opaque blob, rather than silently narrowing the page.
-- **`confluence-publish --dry-run` previews the gate** against the live page
+- **`publish.sh --dry-run` previews the gate** against the live page
   before you run for real, so a refusal is not a surprise on the write - the
   page can still change in between, so treat the preview as "likely", not
   certain.
@@ -184,10 +204,10 @@ Talk to your agent: "raise a bug in PAY about the timeout", "what does the
 wiki say about egress addresses", "publish this doc to Confluence". The
 scripts are also usable directly.
 
-### jira
+### Jira
 
 ```bash
-cd ~/.claude/skills/jira/scripts
+cd ~/.claude/skills/atlassian/scripts
 
 ./jira-meta.sh projects              # project keys you can see
 ./jira-meta.sh types PAY             # issue type names in that project
@@ -236,10 +256,10 @@ Blank lines in a plain-text description become separate paragraphs. `bulk`
 has no `--description-file` equivalent - every description in a bulk file is
 plain text.
 
-### confluence
+### Confluence
 
 ```bash
-cd ~/.claude/skills/confluence/scripts
+cd ~/.claude/skills/atlassian/scripts
 
 ./confluence-search.sh spaces
 ./confluence-search.sh text 'egress address'
@@ -263,10 +283,10 @@ no header line ahead of it to reject as loose text.
 `update` always needs that `--base-version` - see [§ A known limit](#a-known-limit-the-round-trip-gate)
 for what it protects against and what it does not.
 
-### confluence-publish
+### Publishing markdown
 
 ```bash
-cd ~/.claude/skills/confluence-publish/scripts
+cd ~/.claude/skills/atlassian/scripts
 
 ./publish.sh docs/payment-correlation.md --dry-run
 ./publish.sh docs/payment-correlation.md
@@ -318,25 +338,26 @@ all (`` ```c++ ``), not restricted to a plain word.
 
 | Path | What it is |
 |---|---|
-| `skills/_shared/scripts/atlassian-setup.sh` | Credential capture and verification, for all three skills |
-| `skills/_shared/scripts/_common.sh` | Shared request, error, ADF and credential-migration helpers |
-| `skills/_shared/scripts/htmlplus.py` | The HTML+ <-> ADF converter, the round-trip gate, and opaque passthrough |
-| `skills/_shared/references/house-style.md` | Conventions for writing a page or a description |
-| `skills/_shared/references/html-patterns.md` | Every HTML+ pattern - panels, lozenges, tasks, layouts, tables |
-| `skills/_shared/references/checklist.md` | Pre-publish checklist |
-| `skills/_shared/tests/` | The converter suite and the repo-wide constraint suite |
-| `skills/jira/SKILL.md` | What the agent reads for `jira` |
-| `skills/jira/references/ste.md` | Simplified Technical English, for issue text |
-| `skills/jira/scripts/jira-meta.sh` | Projects, issue types, fields, priorities, read-only |
-| `skills/jira/scripts/jira-issues.sh` | Create, bulk create, get, search |
-| `skills/confluence/SKILL.md` | What the agent reads for `confluence` |
-| `skills/confluence/scripts/confluence-search.sh` | Spaces, CQL and free-text search |
-| `skills/confluence/scripts/confluence-pages.sh` | Read, create, update - the stale-write and round-trip guards |
-| `skills/confluence-publish/SKILL.md` | What the agent reads for `confluence-publish` |
-| `skills/confluence-publish/scripts/publish.sh` | The dry-run/create/update run, and the write-back of `page_id` |
-| `skills/confluence-publish/scripts/md_to_htmlplus.py` | Markdown to HTML+, with raw HTML+ passed through |
-| `skills/confluence-publish/scripts/frontmatter.py` | Reads and writes the YAML binding, without `eval` |
-| `skills/confluence-publish/scripts/attachments.sh` | Multipart attachment upload - the token stays off the command line here too |
+| `skills/atlassian/SKILL.md` | What the agent reads first: setup, the rules, and which reference to load |
+| `skills/atlassian/references/jira.md` | Creating, reading and searching Jira issues |
+| `skills/atlassian/references/confluence.md` | Searching, reading, creating and updating Confluence pages |
+| `skills/atlassian/references/publish.md` | Publishing a markdown file to a Confluence page |
+| `skills/atlassian/references/house-style.md` | Conventions for writing a page or a description |
+| `skills/atlassian/references/html-patterns.md` | Every HTML+ pattern - panels, lozenges, tasks, layouts, tables |
+| `skills/atlassian/references/checklist.md` | Pre-publish checklist |
+| `skills/atlassian/references/ste.md` | Simplified Technical English, for issue text |
+| `skills/atlassian/scripts/atlassian-setup.sh` | Credential capture and verification |
+| `skills/atlassian/scripts/_common.sh` | Shared request, error, ADF and credential-migration helpers |
+| `skills/atlassian/scripts/htmlplus.py` | The HTML+ <-> ADF converter, the round-trip gate, and opaque passthrough |
+| `skills/atlassian/scripts/jira-meta.sh` | Projects, issue types, fields, priorities, read-only |
+| `skills/atlassian/scripts/jira-issues.sh` | Create, bulk create, get, search |
+| `skills/atlassian/scripts/confluence-search.sh` | Spaces, CQL and free-text search |
+| `skills/atlassian/scripts/confluence-pages.sh` | Read, create, update - the stale-write and round-trip guards |
+| `skills/atlassian/scripts/publish.sh` | The dry-run/create/update run, and the write-back of `page_id` |
+| `skills/atlassian/scripts/md_to_htmlplus.py` | Markdown to HTML+, with raw HTML+ passed through |
+| `skills/atlassian/scripts/frontmatter.py` | Reads and writes the YAML binding, without `eval` |
+| `skills/atlassian/scripts/attachments.sh` | Multipart attachment upload - the token stays off the command line here too |
+| `skills/atlassian/tests/` | The converter, publish and repo-wide constraint suites |
 
 ## Also from DBHQ
 

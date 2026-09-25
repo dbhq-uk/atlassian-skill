@@ -10,9 +10,9 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=../../_shared/scripts/_common.sh
-. "$SCRIPT_DIR/../../_shared/scripts/_common.sh"
-HTMLPLUS="$SCRIPT_DIR/../../_shared/scripts/htmlplus.py"
+# shellcheck source=_common.sh source-path=SCRIPTDIR
+. "$SCRIPT_DIR/_common.sh"
+HTMLPLUS="$SCRIPT_DIR/htmlplus.py"
 
 usage() {
     cat >&2 <<'USAGE'
@@ -25,7 +25,7 @@ Usage:
                              [--title <title>] [--message <version message>]
 
 The body file holds a Confluence HTML+ fragment. Read
-_shared/references/html-patterns.md before writing one.
+references/html-patterns.md before writing one.
 
 --format markdown is one-way, for reading only. It exists so a page is easy
 to skim; there is no markdown-to-ADF path, and writing a markdown render back
@@ -175,7 +175,7 @@ case "$CMD" in
         PAGE_ID="${1:-}"; shift || true
         [ -n "$PAGE_ID" ] || usage
         require_numeric_page_id "$PAGE_ID"
-        BODY_FILE=""; TITLE=""; MESSAGE="Updated by the confluence skill"; BASE_VERSION=""
+        BODY_FILE=""; TITLE=""; MESSAGE="Updated by the atlassian skill"; BASE_VERSION=""
         while [ $# -gt 0 ]; do
             case "$1" in
                 --body-file)     [ $# -ge 2 ] || usage; BODY_FILE="$2";     shift 2 ;;
