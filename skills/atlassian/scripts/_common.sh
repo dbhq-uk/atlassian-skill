@@ -202,6 +202,16 @@ text_to_adf() {
                                  content: [{type: "text", text: .}]}]}'
 }
 
+# htmlplus_markdown - read an ADF document on stdin and print it as markdown,
+# for reading only. Tables, nested lists and mentions survive; see
+# htmlplus.py's adf_to_markdown. Exits 1 with the converter's message on
+# stderr if the document cannot be read.
+htmlplus_markdown() {
+    local script
+    script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/htmlplus.py"
+    python3 "$script" to-markdown
+}
+
 # htmlplus_jira <html-file> - convert an HTML+ fragment to ADF for a Jira field.
 # Refuses any node or mark not on Atlassian's Jira list. Emits the ADF
 # document as JSON on stdout; exits 1 with the converter's message on stderr.

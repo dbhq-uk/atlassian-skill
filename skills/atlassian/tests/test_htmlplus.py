@@ -1849,6 +1849,61 @@ class TestAdfToMarkdown(unittest.TestCase):
         doc = html_to_adf('<pre><code class="language-json">{"a": 1}</code></pre>')
         self.assertEqual(adf_to_markdown(doc), '```json\n{"a": 1}\n```')
 
+    @staticmethod
+    def _para(*content):
+        return {"type": "doc", "version": 1,
+                "content": [{"type": "paragraph", "content": list(content)}]}
+
+    def test_a_mention_is_kept(self):
+        # It used to vanish, so "ask @Sam please" read as "ask  please".
+        doc = self._para(
+            {"type": "text", "text": "ask "},
+            {"type": "mention", "attrs": {"id": "acc-1", "text": "@Sam"}},
+            {"type": "text", "text": " please"})
+        self.assertEqual(adf_to_markdown(doc), "ask @Sam please")
+
+    def test_a_mention_with_no_text_still_names_somebody(self):
+        doc = self._para({"type": "mention", "attrs": {"id": "acc-1"}})
+        self.assertEqual(adf_to_markdown(doc), "@acc-1")
+
+    def test_an_emoji_is_kept(self):
+        doc = self._para({"type": "emoji", "attrs": {"shortName": ":tick:"}})
+        self.assertEqual(adf_to_markdown(doc), ":tick:")
+
+    def test_a_hard_break_is_a_line_break(self):
+        doc = self._para({"type": "text", "text": "a"}, {"type": "hardBreak"},
+                         {"type": "text", "text": "b"})
+        self.assertEqual(adf_to_markdown(doc), "a\nb")
+
+    def test_an_unknown_inline_node_is_marked_not_dropped(self):
+        doc = self._para({"type": "text", "text": "see "},
+                         {"type": "inlineExtension", "attrs": {}})
+        self.assertEqual(adf_to_markdown(doc),
+                         "see [unsupported node: inlineExtension]")
+
+    def test_strike_is_kept(self):
+        doc = self._para({"type": "text", "text": "old",
+                          "marks": [{"type": "strike"}]})
+        self.assertEqual(adf_to_markdown(doc), "~~old~~")
+
+    def test_a_nested_list_keeps_its_nesting(self):
+        doc = html_to_adf("<ul><li><p>parent</p><ul><li><p>child</p></li></ul>"
+                          "</li></ul>")
+        self.assertEqual(adf_to_markdown(doc), "- parent\n  - child")
+
+    def test_an_ordered_list_keeps_its_numbers_and_start(self):
+        doc = html_to_adf('<ol start="3"><li><p>c</p></li><li><p>d</p></li></ol>')
+        self.assertEqual(adf_to_markdown(doc), "3. c\n4. d")
+
+    def test_a_table_cell_holding_a_list_or_a_pipe_stays_on_one_row(self):
+        doc = html_to_adf(
+            "<table><tbody><tr><th><p>Ports</p></th></tr>"
+            "<tr><td><ul><li><p>1433</p></li><li><p>a|b</p></li></ul></td></tr>"
+            "</tbody></table>")
+        lines = adf_to_markdown(doc).splitlines()
+        self.assertEqual(len(lines), 3, lines)
+        self.assertEqual(lines[2], "| - 1433<br>- a\\|b |")
+
 
 class TestReverseCli(unittest.TestCase):
     def _run(self, args, stdin):

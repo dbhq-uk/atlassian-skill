@@ -208,6 +208,18 @@ class TestEdit(_Harness):
         self.assertEqual(after["content"][0], adf["content"][0])
 
 
+class TestReadMarkdown(_Harness):
+    def test_a_mention_survives_read_format_markdown(self):
+        self.page({"type": "doc", "version": 1, "content": [
+            {"type": "paragraph", "content": [
+                {"type": "text", "text": "ask "},
+                {"type": "mention", "attrs": {"id": "acc-1", "text": "@Sam"}},
+                {"type": "text", "text": " please"}]}]})
+        result = self.run_pages("read", "1234567", "--format", "markdown")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ask @Sam please", result.stdout)
+
+
 class TestSpliceRules(unittest.TestCase):
     """adf_edit.splice's refusals, called directly."""
 

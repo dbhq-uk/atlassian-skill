@@ -105,10 +105,12 @@ Four rules carry most of the value: a sentence has a maximum of 25 words, the ac
 ## Reading
 
 ```bash
-${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh get <ISSUE-KEY>
+${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh get <ISSUE-KEY> [--comments N]
 ${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh search "<JQL>" [max]
 ${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh mine [max]
 ```
+
+`get` prints the description as markdown, through the same converter `confluence-pages.sh read --format markdown` uses, so tables, nested lists and mentions read as they look in Jira. It is for reading only: never edit that markdown and send it back. It then shows the last 5 comments, oldest first, with author and date. `--comments N` shows more, and `--comments 0` none.
 
 `search` posts to `/rest/api/3/search/jql`. The old `GET /rest/api/3/search` is deprecated and is not used here.
 
