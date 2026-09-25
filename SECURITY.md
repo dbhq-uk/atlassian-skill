@@ -58,7 +58,7 @@ converter cannot read back unchanged - a live-site measurement once put
 this at roughly 60% of a 289-page sample, before this converter generalised
 its attribute and mark carry-through to every named node type; the same
 measurement now passes cleanly. Neither guard has a bypass - there is no
-`--force` anywhere in this skill family. A refusal needs a human decision in
+`--force` anywhere in this skill. A refusal needs a human decision in
 the Confluence UI, not a flag.
 
 ### Scope of the token

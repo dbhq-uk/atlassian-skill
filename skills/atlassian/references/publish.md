@@ -1,17 +1,10 @@
----
-name: confluence-publish
-description: Publish a repository's markdown files to Confluence Cloud pages, idempotently, with the page id stored in each file's frontmatter. Trigger on phrases like "publish this to confluence", "push the docs to the wiki", "sync these docs to confluence", "publish the spec".
----
-
 # Publishing markdown to Confluence
 
 Turns a markdown file in a repository into a Confluence page, and keeps it that way. The file is the master; Confluence is the rendering.
 
-This skill **creates and updates only**. It has no delete verb anywhere - not for a page, not for an attachment. Removing something is a human job in the Confluence UI.
+Publishing **creates and updates only**. There is no delete verb anywhere - not for a page, not for an attachment. Removing something is a human job in the Confluence UI.
 
-## Prerequisites
-
-Credentials are shared with `jira` and `confluence`. If `~/.dbhq/atlassian/config.json` does not exist, run `${CLAUDE_SKILL_DIR}/../_shared/scripts/atlassian-setup.sh`.
+Credentials and setup are in `SKILL.md`. The rules there apply here too.
 
 ## The binding
 
@@ -28,7 +21,7 @@ confluence:
 
 `page_id` is written back on the first publish. **Commit that change** - without it the next run creates a second page instead of updating the first.
 
-Get the space id from `${CLAUDE_SKILL_DIR}/../confluence/scripts/confluence-search.sh spaces`. It is the numeric id, not the key.
+Get the space id from `${CLAUDE_SKILL_DIR}/scripts/confluence-search.sh spaces`. It is the numeric id, not the key.
 
 ## Publishing
 
@@ -45,7 +38,7 @@ The page title is the file's first `# ` heading, or the filename if there is non
 
 `publish.sh` updates through `confluence-pages.sh update`, which carries two protections you do not have to think about but should know are there, because both can stop a publish with nothing sent.
 
-**`update` always needs `--base-version <n>` - `publish.sh` supplies it for you, read fresh immediately before the write.** The file is the master, so there is normally nothing to "base" an edit on the way a human splicing a change into a fetched copy would - but the guard still catches a real case: someone editing the live page directly at the exact moment `publish.sh` runs. If that happens, `update` refuses rather than silently discarding their in-flight change, and reports it as the page having moved on since the version `publish.sh` just read. **The fix is simply to run `publish.sh` again** - there is nothing to splice, because the file on disk already is the whole intended content, unlike the human workflow the `confluence` skill documents.
+**`update` always needs `--base-version <n>` - `publish.sh` supplies it for you, read fresh immediately before the write.** The file is the master, so there is normally nothing to "base" an edit on the way a human splicing a change into a fetched copy would - but the guard still catches a real case: someone editing the live page directly at the exact moment `publish.sh` runs. If that happens, `update` refuses rather than silently discarding their in-flight change, and reports it as the page having moved on since the version `publish.sh` just read. **The fix is simply to run `publish.sh` again** - there is nothing to splice, because the file on disk already is the whole intended content, unlike the human workflow `confluence.md` documents.
 
 **`update` also runs a round-trip gate.** It refuses to overwrite a page whose current content this converter cannot read back unchanged. A live-site measurement once found this on roughly half of real pages - almost always an ordinary node's own attribute or mark (a local id, a colspanned cell's per-column widths, a list's start number) that this converter dropped rather than carried through, not an exotic node type. Generalising the carry-through-or-opaque-passthrough rule that already covered media to every named node type closed that gap, and the same measurement now passes cleanly; what still refuses is narrower - a node type or attribute this converter has never modelled at all, or a table a person left genuinely inconsistent. `UPDATE REPLACES THE WHOLE BODY`, so writing over content like that would silently drop whatever this converter cannot carry through, not just the part `publish.sh` meant to change. This is expected, ordinary behaviour on a page with any editing history outside this pipeline, not a sign anything is broken:
 
@@ -55,7 +48,7 @@ If the page moved on since this run started, just run publish.sh again - the fil
 If the converter refused the round trip, there is no --force: resolve it directly in the Confluence UI, then re-run.
 ```
 
-**There is no `--force` anywhere in this skill family, and `publish.sh` adds none.** A round-trip refusal needs a human decision in the Confluence UI, not a flag. Run `--dry-run` first and it previews this exact check against the page as it stands right now, so the refusal is not a surprise on the real run - though the page can still change between the preview and the write, so treat the preview as "likely", not certain.
+**There is no `--force` anywhere in this skill, and `publish.sh` adds none.** A round-trip refusal needs a human decision in the Confluence UI, not a flag. Run `--dry-run` first and it previews this exact check against the page as it stands right now, so the refusal is not a surprise on the real run - though the page can still change between the preview and the write, so treat the preview as "likely", not certain.
 
 ## What markdown can and cannot express
 
@@ -79,8 +72,8 @@ A fenced code block's language token is passed straight into a CSS class name (`
 
 **Read these two files first. Every time.** They are the difference between a page that uses the platform and a page that is a wall of bold text:
 
-1. `${CLAUDE_SKILL_DIR}/../_shared/references/house-style.md` - the conventions, and when to reach for a raw HTML+ pattern instead of plain markdown
-2. `${CLAUDE_SKILL_DIR}/../_shared/references/html-patterns.md` - every HTML+ pattern markdown has no syntax for
+1. `${CLAUDE_SKILL_DIR}/references/house-style.md` - the conventions, and when to reach for a raw HTML+ pattern instead of plain markdown
+2. `${CLAUDE_SKILL_DIR}/references/html-patterns.md` - every HTML+ pattern markdown has no syntax for
 
 And if it exists, read `~/.dbhq/atlassian/house-style.md` too. That is the user's own tone and conventions, and it wins over anything in the shipped reference.
 

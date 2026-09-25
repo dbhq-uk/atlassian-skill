@@ -17,7 +17,7 @@ import tempfile
 import unittest
 
 REPO = pathlib.Path(__file__).resolve().parents[3]
-SCRIPT = REPO / "skills" / "confluence-publish" / "scripts" / "attachments.sh"
+SCRIPT = REPO / "skills" / "atlassian" / "scripts" / "attachments.sh"
 
 
 class TestAttachmentsFilenameInjectionGuard(unittest.TestCase):

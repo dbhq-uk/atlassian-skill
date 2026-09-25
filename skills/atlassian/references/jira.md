@@ -1,26 +1,10 @@
----
-name: jira
-description: Create and read Jira Cloud issues via the REST API. Trigger on phrases like "jira", "create a ticket", "raise a ticket", "jira ticket", "what's assigned to me", "search jira", "JQL".
----
-
 # Jira issue creation and lookup
 
 Create and read Jira Cloud issues through the REST v3 API, authenticated with an API token.
 
-This skill **creates and reads only**. It has no delete, no bulk transition, and no project administration. Anything destructive is done by a human in the Jira UI.
+The Jira commands **create and read only**. There is no delete, no bulk transition and no project administration. Anything destructive is done by a human in the Jira UI.
 
-## Prerequisites
-
-- Credentials in `~/.dbhq/atlassian/config.json` - shared with `confluence`; run setup if absent
-- `jq`, `curl` and `column` (the last for `jira-meta.sh` and `search`/`mine`'s table output - `bsdextrautils` on Debian/Ubuntu, `util-linux` elsewhere; not guaranteed present)
-
-## Setup
-
-```bash
-${CLAUDE_SKILL_DIR}/../_shared/scripts/atlassian-setup.sh
-```
-
-It asks for the site URL, the account email, and an API token from <https://id.atlassian.com/manage-profile/security/api-tokens>. The token input is hidden. It verifies Jira access against `/rest/api/3/myself` **before** writing anything, then checks Confluence access too (a warning, not a blocker - a token can be valid for Jira with no Confluence licence), and saves to `~/.dbhq/atlassian/config.json` at mode 600 only after both checks have run. Credentials live outside the repository and are never committed.
+Credentials and setup are in `SKILL.md`. The rules there apply here too.
 
 ## Look before you create
 
@@ -83,12 +67,12 @@ ${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh create PAY Task "Confirm the egress a
 
 **Read these two files first. Every time.** They are the difference between a description that uses the platform and one that is a wall of bold text:
 
-1. `${CLAUDE_SKILL_DIR}/../_shared/references/house-style.md` - the conventions
-2. `${CLAUDE_SKILL_DIR}/../_shared/references/html-patterns.md` - the HTML+ patterns
+1. `${CLAUDE_SKILL_DIR}/references/house-style.md` - the conventions
+2. `${CLAUDE_SKILL_DIR}/references/html-patterns.md` - the HTML+ patterns
 
 And if it exists, read `~/.dbhq/atlassian/house-style.md` too. That is the user's own tone and conventions, and it wins over anything in the shipped reference.
 
-Work through `${CLAUDE_SKILL_DIR}/../_shared/references/checklist.md` against the body before you send it. Both reference files are written primarily for a Confluence page - skip the sections with no Jira equivalent (page titles, cross-page smart links) and read the rest as it applies to an issue description.
+Work through `${CLAUDE_SKILL_DIR}/references/checklist.md` against the body before you send it. Both reference files are written primarily for a Confluence page - skip the sections with no Jira equivalent (page titles, cross-page smart links) and read the rest as it applies to an issue description.
 
 **Jira's ADF profile is narrower than Confluence's, and `--description-file` refuses what does not fit it.** A status lozenge, a decision list, an expand and a multi-column layout are Confluence-only components. The Jira API accepts a description containing one and then renders nothing where it should be - the worst kind of failure, because it looks like it worked. `--description-file` refuses these before anything is sent, naming the node:
 
@@ -100,7 +84,7 @@ Panels, code blocks with language highlighting, task lists, tables and headings 
 
 ## Writing the issue text
 
-Every summary and every description is written in **Simplified Technical English**. The rules, the word choices and the pre-create checklist are in [references/ste.md](references/ste.md). Read that file before you write an issue.
+Every summary and every description is written in **Simplified Technical English**. The rules, the word choices and the pre-create checklist are in [ste.md](ste.md). Read that file before you write an issue.
 
 The shape of an issue:
 
@@ -135,12 +119,9 @@ ${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh mine [max]
 3. **Two or more issues means `bulk` with `--dry-run` first**, reviewed, then the real run.
 4. Do not put credentials, tokens, account numbers, or personal data into an issue description. A Jira issue is not a secret store, and in a regulated environment it is disclosable.
 5. On failure, read the `Cause:` and `Fix:` lines the scripts print. They carry Jira's own error text.
-6. **Write the summary and the description in Simplified Technical English** - see [§ Writing the issue text](#writing-the-issue-text) and [references/ste.md](references/ste.md).
+6. **Write the summary and the description in Simplified Technical English** - see [§ Writing the issue text](#writing-the-issue-text) and [ste.md](ste.md).
 
 ## Limits
 
 Jira Cloud allows roughly 60 authenticated requests a minute. `bulk` paces itself at one a second and reports `Created:` and `Failed:` counts at the end; a partial failure leaves the successful issues in place.
 
-## Credentials
-
-`~/.dbhq/atlassian/config.json`, mode 600, holding `site`, `email`, `token` and whether Confluence access is available - shared with `confluence`, since one Atlassian Cloud token authenticates both products on the same site. The token never reaches a command line - `curl` reads it from a 0600 config file, so it does not appear in `ps` or in shell history.

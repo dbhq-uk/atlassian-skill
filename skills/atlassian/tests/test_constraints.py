@@ -7,7 +7,7 @@ import subprocess
 import unittest
 
 REPO = pathlib.Path(__file__).resolve().parents[3]
-REFS = REPO / "skills" / "_shared" / "references"
+REFS = REPO / "skills" / "atlassian" / "references"
 
 # This file is excluded from its own scan. It has to spell out the strings it
 # forbids in order to look for them, so scanning itself would always fail and
@@ -205,7 +205,7 @@ class TestCreateFieldEscapeHatch(unittest.TestCase):
     touches the network, so no fake curl is needed here.
     """
 
-    SCRIPT = REPO / "skills" / "jira" / "scripts" / "jira-issues.sh"
+    SCRIPT = REPO / "skills" / "atlassian" / "scripts" / "jira-issues.sh"
 
     def _run(self, tmp, *args):
         config_dir = tmp / ".dbhq" / "atlassian"
@@ -266,7 +266,7 @@ class TestBulkRejectsAnUnrecognisedFourthArgument(unittest.TestCase):
     unrecognised option is now rejected before the file is even read.
     """
 
-    SCRIPT = REPO / "skills" / "jira" / "scripts" / "jira-issues.sh"
+    SCRIPT = REPO / "skills" / "atlassian" / "scripts" / "jira-issues.sh"
 
     def _home_with_config(self, tmp):
         config_dir = tmp / ".dbhq" / "atlassian"
@@ -323,7 +323,7 @@ class TestJiraMetaFollowsPagination(unittest.TestCase):
     against a fake two-page curl and checks both pages' projects come back.
     """
 
-    SCRIPT = REPO / "skills" / "jira" / "scripts" / "jira-meta.sh"
+    SCRIPT = REPO / "skills" / "atlassian" / "scripts" / "jira-meta.sh"
 
     FAKE_CURL = """#!/bin/bash
 cfg=""
@@ -390,9 +390,9 @@ class TestDiscoveryWarnsWhenTruncated(unittest.TestCase):
     fake curl standing in for a truncated result set.
     """
 
-    CONFLUENCE_SEARCH = (REPO / "skills" / "confluence" / "scripts"
+    CONFLUENCE_SEARCH = (REPO / "skills" / "atlassian" / "scripts"
                           / "confluence-search.sh")
-    JIRA_ISSUES = REPO / "skills" / "jira" / "scripts" / "jira-issues.sh"
+    JIRA_ISSUES = REPO / "skills" / "atlassian" / "scripts" / "jira-issues.sh"
 
     def _fake_curl(self, tmp, body_by_url_substring):
         """A fake curl returning a different canned body depending on what
@@ -524,9 +524,9 @@ class TestConfluencePagesReadStdoutIsAJustTheBody(unittest.TestCase):
     jq").
     """
 
-    PAGES_SH = (REPO / "skills" / "confluence" / "scripts"
+    PAGES_SH = (REPO / "skills" / "atlassian" / "scripts"
                 / "confluence-pages.sh")
-    HTMLPLUS = REPO / "skills" / "_shared" / "scripts" / "htmlplus.py"
+    HTMLPLUS = REPO / "skills" / "atlassian" / "scripts" / "htmlplus.py"
 
     FAKE_CURL = """#!/bin/bash
 cfg=""
@@ -627,9 +627,9 @@ class TestPublishVersionParserTracksConfluencePagesWording(unittest.TestCase):
     wording fails this test directly rather than being caught by hand.
     """
 
-    PAGES_SH = (REPO / "skills" / "confluence" / "scripts"
+    PAGES_SH = (REPO / "skills" / "atlassian" / "scripts"
                 / "confluence-pages.sh")
-    PUBLISH_SH = (REPO / "skills" / "confluence-publish" / "scripts"
+    PUBLISH_SH = (REPO / "skills" / "atlassian" / "scripts"
                   / "publish.sh")
 
     def test_publish_sh_sed_extracts_confluence_pages_sh_header(self):
@@ -684,24 +684,246 @@ class TestNoEmDash(unittest.TestCase):
 class TestHouseStyleIsOnTheWritePath(unittest.TestCase):
     """A reference nothing is required to read is a reference nobody reads.
 
-    This is why the house style is a reference rather than a fourth skill: a
-    skill has to trigger on its own description and can silently not fire,
-    where a SKILL.md instruction to read a file before writing cannot.
+    This is why the house style is a reference rather than a skill of its
+    own: a skill has to trigger on its own description and can silently not
+    fire, where a SKILL.md instruction to read a file before writing cannot.
+    SKILL.md is always loaded, and each write reference repeats the
+    instruction at the point of writing.
     """
 
-    WRITERS = ("confluence", "confluence-publish", "jira")
+    SKILL = REPO / "skills" / "atlassian"
+    WRITERS = (
+        SKILL / "SKILL.md",
+        SKILL / "references" / "jira.md",
+        SKILL / "references" / "confluence.md",
+        SKILL / "references" / "publish.md",
+    )
 
     def test_every_write_path_reads_the_house_style(self):
-        for name in self.WRITERS:
-            skill = REPO / "skills" / name / "SKILL.md"
-            text = skill.read_text(encoding="utf-8")
-            self.assertIn("_shared/references/house-style.md", text, name)
-            self.assertIn("_shared/references/html-patterns.md", text, name)
+        for path in self.WRITERS:
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("${CLAUDE_SKILL_DIR}/references/house-style.md", text, path.name)
+            self.assertIn("${CLAUDE_SKILL_DIR}/references/html-patterns.md", text, path.name)
 
     def test_every_write_path_names_the_user_override(self):
-        for name in self.WRITERS:
-            text = (REPO / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
-            self.assertIn("~/.dbhq/atlassian/house-style.md", text, name)
+        for path in self.WRITERS:
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("~/.dbhq/atlassian/house-style.md", text, path.name)
+
+
+def _skill_dirs():
+    return sorted(p.parent for p in (REPO / "skills").glob("*/SKILL.md"))
+
+
+def _frontmatter(skill_md):
+    text = skill_md.read_text(encoding="utf-8")
+    match = re.match(r"^---\n(.*?)\n---", text, re.S)
+    fields = {}
+    for line in match.group(1).splitlines() if match else []:
+        key, _, value = line.partition(":")
+        fields[key.strip()] = value.strip()
+    return fields
+
+
+class TestTheSkillStandsAlone(unittest.TestCase):
+    """`npx skills add` copies only a folder that holds a SKILL.md.
+
+    Until 25 Sep 2026 this repository shipped three skills that all reached
+    a fourth folder, `_shared`, with `../`. That folder had no SKILL.md, so
+    skills.sh never copied it, and every script failed on its first line.
+    One self-contained folder is the fix; these tests hold it.
+    """
+
+    def test_nothing_in_a_skill_reaches_outside_its_own_folder(self):
+        found = []
+        for skill in _skill_dirs():
+            for path in sorted(skill.rglob("*")):
+                if not path.is_file() or "tests" in path.relative_to(skill).parts:
+                    continue
+                for number, line in enumerate(
+                    path.read_text(encoding="utf-8", errors="replace").splitlines(), 1
+                ):
+                    if "../" in line:
+                        found.append(f"{path.relative_to(REPO)}:{number}: {line.strip()}")
+        self.assertEqual(found, [], "a skill reaches outside its own folder:\n" + "\n".join(found))
+
+    FAKE_CURL = """#!/bin/bash
+cfg=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -K) cfg="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+url=$(grep '^url' "$cfg" | sed 's/.*= "\\(.*\\)"/\\1/')
+hdrfile=$(grep '^dump-header' "$cfg" | sed 's/.*= "\\(.*\\)"/\\1/')
+: > "$hdrfile"
+case "$url" in
+  */rest/api/3/myself)
+    printf '{"displayName":"Test User","accountId":"abc","timeZone":"Europe/London"}' ;;
+  */wiki/api/v2/pages/*)
+    printf '{"id":"1234567","title":"Test Page","status":"current","version":{"number":3},"body":{"atlas_doc_format":{"value":"{\\\\"type\\\\":\\\\"doc\\\\",\\\\"version\\\\":1,\\\\"content\\\\":[{\\\\"type\\\\":\\\\"paragraph\\\\",\\\\"content\\\\":[{\\\\"type\\\\":\\\\"text\\\\",\\\\"text\\\\":\\\\"Hello\\\\"}]}]}"}}}' ;;
+esac
+printf '\\n200'
+"""
+
+    def test_a_copy_of_the_skill_folder_alone_runs(self):
+        """Copy exactly what skills.sh copies - the folder with the SKILL.md
+        and nothing beside it - and run each entry point from the copy."""
+        import shutil
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = pathlib.Path(tmp)
+            installed = tmp / "agent" / "skills" / "atlassian"
+            shutil.copytree(REPO / "skills" / "atlassian", installed,
+                            ignore=shutil.ignore_patterns("tests", "__pycache__"))
+            scripts = installed / "scripts"
+
+            bin_dir = tmp / "bin"
+            bin_dir.mkdir()
+            (bin_dir / "curl").write_text(self.FAKE_CURL)
+            (bin_dir / "curl").chmod(0o755)
+            home = tmp / "home"
+            (home / ".dbhq" / "atlassian").mkdir(parents=True)
+            (home / ".dbhq" / "atlassian" / "config.json").write_text(
+                '{"site":"https://example.atlassian.net",'
+                '"email":"e@x.com","token":"secret"}'
+            )
+            env = {"HOME": str(home),
+                   "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}"}
+            doc = tmp / "doc.md"
+            doc.write_text('---\nconfluence:\n  space: "1"\n---\n\n# Title\n\nBody.\n')
+
+            runs = {
+                "jira-meta.sh whoami":
+                    ["bash", str(scripts / "jira-meta.sh"), "whoami"],
+                "confluence-pages.sh read":
+                    ["bash", str(scripts / "confluence-pages.sh"), "read", "1234567"],
+                "publish.sh --dry-run":
+                    ["bash", str(scripts / "publish.sh"), str(doc), "--dry-run"],
+            }
+            for name, argv in runs.items():
+                result = subprocess.run(argv, capture_output=True, text=True, env=env)
+                self.assertNotIn("No such file", result.stderr, name)
+                self.assertEqual(result.returncode, 0, f"{name}: {result.stderr}")
+
+            result = subprocess.run(
+                ["python3", str(scripts / "htmlplus.py"), "to-adf"],
+                input="<p>Hello</p>", capture_output=True, text=True, env=env,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('"paragraph"', result.stdout)
+
+
+class TestTriggerPhrases(unittest.TestCase):
+    """The host picks a skill by its description. A trigger phrase in two
+    descriptions leaves it guessing - "publish this to confluence" used to
+    sit in two of them."""
+
+    def _phrases(self):
+        phrases = {}
+        for skill in _skill_dirs():
+            description = _frontmatter(skill / "SKILL.md").get("description", "")
+            phrases[skill.name] = [p.lower() for p in re.findall(r'"([^"]+)"', description)]
+        return phrases
+
+    def test_every_skill_has_trigger_phrases(self):
+        for name, phrases in self._phrases().items():
+            self.assertTrue(phrases, f"{name} has no quoted trigger phrases")
+
+    def test_no_trigger_phrase_is_in_two_skills_or_listed_twice(self):
+        owner = {}
+        for name, phrases in self._phrases().items():
+            self.assertEqual(len(phrases), len(set(phrases)), f"{name} repeats a phrase")
+            for phrase in phrases:
+                self.assertNotIn(phrase, owner, f"{phrase!r} is in {owner.get(phrase)} and {name}")
+                owner[phrase] = name
+
+    def test_the_generic_ticket_phrases_are_tied_to_jira(self):
+        # "create a ticket" or "what's assigned to me" on their own would
+        # fire for GitHub, Trello or any other tracker.
+        for name, phrases in self._phrases().items():
+            for phrase in ("create a ticket", "raise a ticket", "what's assigned to me"):
+                self.assertNotIn(phrase, phrases, name)
+
+    def test_the_description_fits_the_agent_skills_limit(self):
+        for skill in _skill_dirs():
+            description = _frontmatter(skill / "SKILL.md").get("description", "")
+            self.assertLessEqual(len(description), 1024, skill.name)
+
+    def test_the_skill_is_named_after_its_folder(self):
+        for skill in _skill_dirs():
+            self.assertEqual(_frontmatter(skill / "SKILL.md").get("name"), skill.name)
+
+
+class TestInstallersRetireTheOldLayout(unittest.TestCase):
+    """install.sh and install-codex.sh put one `atlassian` skill in place, and
+    remove what an earlier run of the same installer left for the four old
+    folders - jira, confluence, confluence-publish and _shared. Those point
+    into folders that no longer exist, so left alone they are dangling
+    duplicates an agent may still match. Anything the installer did not make
+    - a real folder, or a link somewhere else - is left alone, because
+    `jira` and `confluence` are ordinary names a user may have used."""
+
+    def _run(self, script, home):
+        return subprocess.run(
+            ["bash", str(REPO / script)], capture_output=True, text=True,
+            env={"HOME": str(home), "PATH": os.environ.get("PATH", "")},
+        )
+
+    def test_install_sh(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            home = pathlib.Path(tmp)
+            root = home / ".claude" / "skills"
+            root.mkdir(parents=True)
+            (root / "jira").symlink_to("/old/checkout/skills/jira")
+            (root / "_shared").symlink_to("/old/checkout/skills/_shared")
+            (root / "confluence").mkdir()
+            (root / "confluence" / "SKILL.md").write_text("mine")
+            (root / "confluence-publish").symlink_to("/somewhere/else")
+
+            result = self._run("install.sh", home)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                os.readlink(root / "atlassian"), str(REPO / "skills" / "atlassian"))
+            self.assertFalse(os.path.lexists(root / "jira"))
+            self.assertFalse(os.path.lexists(root / "_shared"))
+            self.assertEqual((root / "confluence" / "SKILL.md").read_text(), "mine")
+            self.assertEqual(os.readlink(root / "confluence-publish"), "/somewhere/else")
+            self.assertIn("atlassian/scripts/atlassian-setup.sh", result.stdout)
+
+    def test_install_codex_sh(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            home = pathlib.Path(tmp)
+            root = home / ".codex" / "skills"
+            root.mkdir(parents=True)
+            old = root / "jira"
+            old.mkdir()
+            (old / "SKILL.md").write_text("---\nname: jira\n---\n")
+            (old / "scripts").symlink_to("/old/checkout/skills/jira/scripts")
+            (old / "references").symlink_to("/old/checkout/skills/jira/references")
+            (root / "_shared").symlink_to("/old/checkout/skills/_shared")
+            mine = root / "confluence"
+            mine.mkdir()
+            (mine / "SKILL.md").write_text("mine")
+            (mine / "scripts").symlink_to("/old/checkout/skills/confluence/scripts")
+            (mine / "notes.txt").write_text("not the installer's")
+
+            result = self._run("install-codex.sh", home)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(os.path.lexists(old))
+            self.assertFalse(os.path.lexists(root / "_shared"))
+            self.assertTrue((mine / "notes.txt").is_file())
+
+            skill_md = (root / "atlassian" / "SKILL.md").read_text()
+            self.assertNotIn("CLAUDE_SKILL_DIR}", skill_md)
+            self.assertIn(str(root / "atlassian") + "/scripts/atlassian-setup.sh", skill_md)
+            for sub in ("scripts", "references"):
+                self.assertEqual(
+                    os.readlink(root / "atlassian" / sub),
+                    str(REPO / "skills" / "atlassian" / sub))
 
 
 class TestCredentialMove(unittest.TestCase):
@@ -711,7 +933,7 @@ class TestCredentialMove(unittest.TestCase):
         import subprocess
         return subprocess.run(
             ["bash", "-c",
-             f'. "{REPO}/skills/_shared/scripts/_common.sh"; echo "$CONFIG_DIR"'],
+             f'. "{REPO}/skills/atlassian/scripts/_common.sh"; echo "$CONFIG_DIR"'],
             capture_output=True, text=True,
             env={"HOME": str(home), "PATH": "/usr/bin:/bin"},
         )
@@ -789,7 +1011,7 @@ class TestPublishIdempotency(unittest.TestCase):
     def _run_dry_run(self, frontmatter_body):
         import subprocess
         import tempfile
-        script = REPO / "skills" / "confluence-publish" / "scripts" / "publish.sh"
+        script = REPO / "skills" / "atlassian" / "scripts" / "publish.sh"
         with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as f:
             f.write(frontmatter_body)
             path = f.name
@@ -825,11 +1047,11 @@ class TestPublishRefusesAnEmptyBody(unittest.TestCase):
     into a stopped script rather than a silently empty $BODY.
     """
 
-    SCRIPT = (REPO / "skills" / "confluence-publish" / "scripts"
+    SCRIPT = (REPO / "skills" / "atlassian" / "scripts"
               / "publish.sh")
-    FRONTMATTER_PY = (REPO / "skills" / "confluence-publish" / "scripts"
+    FRONTMATTER_PY = (REPO / "skills" / "atlassian" / "scripts"
                        / "frontmatter.py")
-    MD_TO_HTMLPLUS_PY = (REPO / "skills" / "confluence-publish" / "scripts"
+    MD_TO_HTMLPLUS_PY = (REPO / "skills" / "atlassian" / "scripts"
                           / "md_to_htmlplus.py")
 
     def _write(self, content, mode="w", **kwargs):
@@ -900,7 +1122,7 @@ class TestTokenNeverReachesProcessArgv(unittest.TestCase):
     close for curl, and had been left open here for jq.
     """
 
-    SETUP_SH = REPO / "skills" / "_shared" / "scripts" / "atlassian-setup.sh"
+    SETUP_SH = REPO / "skills" / "atlassian" / "scripts" / "atlassian-setup.sh"
 
     def test_the_saved_token_never_appears_in_jqs_own_argv(self):
         import json
@@ -1150,7 +1372,7 @@ class TestTokenTempFileCleanupOnSignal(unittest.TestCase):
             fake_curl = bin_dir / "curl"
             fake_curl.write_text("#!/bin/bash\nsleep 30\n")
             fake_curl.chmod(0o755)
-            common_sh = REPO / "skills" / "_shared" / "scripts" / "_common.sh"
+            common_sh = REPO / "skills" / "atlassian" / "scripts" / "_common.sh"
             harness = (
                 f'. "{common_sh}"; SITE=https://example.atlassian.net; '
                 f'EMAIL=e@x.com; TOKEN=secret; api GET /rest/api/3/myself'
@@ -1181,7 +1403,7 @@ class TestTokenTempFileCleanupOnSignal(unittest.TestCase):
             upload_file = home / "diagram.png"
             upload_file.write_text("data")
 
-            script = (REPO / "skills" / "confluence-publish" / "scripts"
+            script = (REPO / "skills" / "atlassian" / "scripts"
                       / "attachments.sh")
             self._assert_cleans_up_on_term(
                 ["bash", str(script), "upload", "1234567", str(upload_file)],

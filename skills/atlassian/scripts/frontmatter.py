@@ -31,7 +31,7 @@ anticipated up front:
   demonstrably has frontmatter look like it has none.
 - The write itself is atomic: text is written to a sibling temporary file
   and moved into place with os.replace(), never opened for truncation in
-  place. This is the destructive half of confluence-publish - it rewrites a
+  place. This is the destructive half of publish.sh - it rewrites a
   file that may hold uncommitted work - and a process killed mid-write must
   never be able to leave it half-written.
 """

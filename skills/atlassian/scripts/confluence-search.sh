@@ -6,8 +6,8 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=../../_shared/scripts/_common.sh
-. "$SCRIPT_DIR/../../_shared/scripts/_common.sh"
+# shellcheck source=_common.sh source-path=SCRIPTDIR
+. "$SCRIPT_DIR/_common.sh"
 
 usage() {
     cat >&2 <<'USAGE'

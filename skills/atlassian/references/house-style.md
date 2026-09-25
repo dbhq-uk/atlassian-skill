@@ -128,7 +128,7 @@ colleague writing to another one, and it is never sales-heavy or hyperbolic.
   which two readers will read two ways.
 
 **Your own conventions go in a file, not in this one.** If
-`~/.dbhq/atlassian/house-style.md` exists, the skills read it and apply it on
+`~/.dbhq/atlassian/house-style.md` exists, the skill reads it and applies it on
 top of everything here. That is where an organisation's tone, its real
 measured column widths, its canonical site host and its own naming rules
 belong. Absent that file, this reference is the whole style.

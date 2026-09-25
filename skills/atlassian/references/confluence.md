@@ -1,34 +1,21 @@
----
-name: confluence
-description: Search, read, create and update Confluence Cloud pages via the REST API. Trigger on phrases like "confluence", "the wiki", "what does the wiki say", "create a confluence page", "update that page", "CQL", "publish this to confluence".
----
-
 # Confluence pages
 
 Search, read, create and update Confluence Cloud pages through the v2 REST API, authenticated with an API token. No MCP server.
 
-This skill **reads, creates and updates**. It has no delete, no space administration and no permission change. Deleting a page is a human job in the Confluence UI.
+The Confluence commands **read, create and update**. There is no delete, no space administration and no permission change. Deleting a page is a human job in the Confluence UI.
 
-## Prerequisites
-
-Credentials are shared with `jira`. If `~/.dbhq/atlassian/config.json` does not exist, run:
-
-```bash
-${CLAUDE_SKILL_DIR}/../_shared/scripts/atlassian-setup.sh
-```
-
-It asks for the site URL, the account email and an API token from <https://id.atlassian.com/manage-profile/security/api-tokens>, verifies Jira access, then checks Confluence access (a warning, not a blocker - a token can be valid for Jira with no Confluence licence), and saves only after both checks have run.
+Credentials and setup are in `SKILL.md`. The rules there apply here too.
 
 ## Before you write anything
 
 **Read these two files first. Every time.** They are the difference between a page that uses the platform and a page that is a wall of bold text:
 
-1. `${CLAUDE_SKILL_DIR}/../_shared/references/house-style.md` - the conventions
-2. `${CLAUDE_SKILL_DIR}/../_shared/references/html-patterns.md` - the HTML+ patterns
+1. `${CLAUDE_SKILL_DIR}/references/house-style.md` - the conventions
+2. `${CLAUDE_SKILL_DIR}/references/html-patterns.md` - the HTML+ patterns
 
 And if it exists, read `~/.dbhq/atlassian/house-style.md` too. That is the user's own tone, column widths and site conventions, and it wins over anything in the shipped reference.
 
-Work through `${CLAUDE_SKILL_DIR}/../_shared/references/checklist.md` against the body before you send it.
+Work through `${CLAUDE_SKILL_DIR}/references/checklist.md` against the body before you send it.
 
 ## Finding a page
 

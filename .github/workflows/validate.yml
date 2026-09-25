@@ -45,18 +45,25 @@ jobs:
           sys.exit(0 if ok else 1)
           PY
 
-      - name: Python tests
-        # Both directories that carry a tests/ folder. skills/_shared/tests
-        # holds the converter suite (test_htmlplus.py) and the repo-wide
-        # constraint suite (test_constraints.py, run again below on its
-        # own); skills/confluence-publish/tests holds the markdown-to-HTML+
-        # and frontmatter suite. jira and confluence have no scripts this
-        # skill family's Python touches directly, so they carry no tests/
-        # directory of their own - _common.sh and the API calls are bash,
-        # exercised live rather than unit-tested.
+      # skills.sh (`npx skills add`) copies only a folder that holds a
+      # SKILL.md. Until 25 Sep 2026 every script here reached a _shared
+      # folder with ../, _shared had no SKILL.md, and so every script failed
+      # on its first line after that install. A skill folder must carry
+      # everything it runs. tests/ is exempt: it never ships to an agent.
+      - name: No skill reaches outside its own folder
         run: |
-          python3 -m unittest discover -s skills/_shared/tests -v
-          python3 -m unittest discover -s skills/confluence-publish/tests -v
+          if grep -rnF --exclude-dir=tests --exclude-dir=__pycache__ '../' skills/; then
+            echo "A skill reaches outside its own folder with ../ - see above." >&2
+            echo "Fix: keep every script and reference the skill uses inside skills/<name>/." >&2
+            exit 1
+          fi
+
+      - name: Python tests
+        # skills/atlassian/tests holds the converter suite (test_htmlplus.py),
+        # the markdown and frontmatter suite (test_publish.py), the
+        # attachment upload guard (test_attachments.py) and the repo-wide
+        # constraint suite (test_constraints.py, run again below on its own).
+        run: python3 -m unittest discover -s skills/atlassian/tests -v
 
       - name: Nothing client-specific reached this public repository
         # test_constraints.py is the one place this rule lives - em dashes,
@@ -68,10 +75,10 @@ jobs:
         # failure in this specific gate is not buried inside a long test
         # log - and so nobody re-adds a second copy of these patterns as a
         # grep, which is what this step used to be.
-        run: python3 -m unittest skills._shared.tests.test_constraints -v
+        run: python3 -m unittest skills.atlassian.tests.test_constraints -v
 
       # Every .sh and .py file in the repo - install.sh, install-codex.sh and
-      # all four skills/*/ directories - is already shellchecked and
+      # everything under skills/atlassian/ - is already shellchecked and
       # syntax-checked by the "lint" job below, added 17 Sep 2026 across
       # every DBHQ skill repo. This job does not run shellcheck or py_compile
       # a second time; see that job's own comment for why it is scoped the
@@ -97,10 +104,9 @@ jobs:
       - name: shellcheck
         # -S warning, not the default, because `info` and `style` fire on
         # idioms these scripts use deliberately. -x follows the
-        # `# shellcheck source=` directives that pull in
-        # _shared/scripts/_common.sh, which shellcheck cannot check without
-        # it. xargs -r so a repo with no shell scripts is a pass rather
-        # than a shellcheck usage error.
+        # `# shellcheck source=` directives that pull in _common.sh, which
+        # shellcheck cannot check without it. xargs -r so a repo with no
+        # shell scripts is a pass rather than a shellcheck usage error.
         run: |
           find . -name '*.sh' -not -path '*/.venv/*' -print0 \
             | xargs -0 -r shellcheck -S warning -x

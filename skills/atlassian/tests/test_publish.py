@@ -384,7 +384,7 @@ class TestMarkdownToHtmlPlus(unittest.TestCase):
         self.assertIn("<p>After.</p>", out)
 
     def test_output_converts_cleanly_to_adf(self):
-        sys.path.insert(0, str(SCRIPTS.parents[1] / "_shared" / "scripts"))
+        sys.path.insert(0, str(SCRIPTS))
         from htmlplus import html_to_adf
 
         src = (

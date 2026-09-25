@@ -31,7 +31,7 @@
 # - update also runs a round-trip gate: it refuses to overwrite a page whose
 #   current content this converter cannot read back unchanged (observed on
 #   real pages to refuse roughly 60% of the time). There is no --force
-#   anywhere in this skill family and this script adds none. A refusal here
+#   anywhere in this skill and this script adds none. A refusal here
 #   is not a bug to work around - it means the live page carries something,
 #   usually a direct edit made through the Confluence editor, that this
 #   converter cannot carry through safely, and only a human in the
@@ -52,8 +52,8 @@ set -e
 set -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SHARED="$SCRIPT_DIR/../../_shared/scripts"
-PAGES="$SCRIPT_DIR/../../confluence/scripts/confluence-pages.sh"
+HTMLPLUS="$SCRIPT_DIR/htmlplus.py"
+PAGES="$SCRIPT_DIR/confluence-pages.sh"
 
 usage() {
     cat >&2 <<'USAGE'
@@ -120,7 +120,7 @@ python3 "$SCRIPT_DIR/frontmatter.py" body "$FILE" \
 # truncated to something that converts to nothing (an HTML comment, stray
 # whitespace), must not silently become "the page now says only the source
 # banner" with an exit 0 and no warning.
-BODY_ADF=$(python3 "$SHARED/htmlplus.py" to-adf < "$BODY") || {
+BODY_ADF=$(python3 "$HTMLPLUS" to-adf < "$BODY") || {
     echo "Error: $FILE did not convert to a usable body." >&2
     echo "Cause: the HTML+ conversion failed - see the error above. Nothing was sent." >&2
     echo "Fix: correct $FILE and try again." >&2
@@ -179,7 +179,7 @@ BANNER=$(mktemp); trap 'rm -f "$BODY" "$BANNER"' EXIT
 } > "$BANNER.full" && mv "$BANNER.full" "$BANNER"
 
 # Prove it converts before reporting anything as safe.
-if ! python3 "$SHARED/htmlplus.py" to-adf < "$BANNER" > /dev/null; then
+if ! python3 "$HTMLPLUS" to-adf < "$BANNER" > /dev/null; then
     echo "Fix: correct $FILE and try again. Nothing was sent." >&2
     exit 1
 fi
@@ -199,7 +199,7 @@ if [ "$DRY_RUN" = "1" ]; then
         if READ_OUT=$("$PAGES" read "$PAGE_ID" --format adf 2>&1); then
             ADF_JSON=$(printf '%s\n' "$READ_OUT" | grep -v '^#')
             if ROUNDTRIP_ERR=$(printf '%s' "$ADF_JSON" \
-                    | python3 "$SHARED/htmlplus.py" check-roundtrip 2>&1 1>/dev/null); then
+                    | python3 "$HTMLPLUS" check-roundtrip 2>&1 1>/dev/null); then
                 echo "  Round trip: page $PAGE_ID reads back unchanged - the update is expected to be accepted"
             else
                 echo "  Round trip: WOULD LIKELY BE REFUSED - ${ROUNDTRIP_ERR#Error: }"

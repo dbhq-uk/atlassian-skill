@@ -5,7 +5,7 @@ Thanks for your interest - contributions are welcome.
 ## Ways to help
 
 - Report a bug or request a feature via [issues](https://github.com/dbhq-uk/atlassian-skill/issues)
-- Sharpen a skill's instructions, improve an error message, or widen what a
+- Sharpen the skill's instructions, improve an error message, or widen what a
   create or update call can set, via a pull request
 
 ## Local development
@@ -13,7 +13,7 @@ Thanks for your interest - contributions are welcome.
 ```bash
 git clone https://github.com/dbhq-uk/atlassian-skill.git
 cd atlassian-skill
-./install.sh          # symlinks the skills into ~/.claude/skills (edits are live)
+./install.sh          # symlinks the skill into ~/.claude/skills (edits are live)
 ./install-codex.sh    # the same for ~/.codex/skills
 ```
 
@@ -26,15 +26,15 @@ at install time rather than symlinked.
 
 ```bash
 for s in skills/*/scripts/*.sh install.sh install-codex.sh; do bash -n "$s"; shellcheck -S warning -x "$s"; done
-python3 -m unittest discover -s skills/_shared/tests -v
-python3 -m unittest discover -s skills/confluence-publish/tests -v
+python3 -m unittest discover -s skills/atlassian/tests -v
 for p in skills/*/scripts/*.py; do python3 -m py_compile "$p"; done
 jq empty .claude-plugin/plugin.json
 ```
 
 CI runs the Python test suite above, plus a repository-wide shellcheck and
-`ruff --select E9,F` pass over every script, and a check that every
-`SKILL.md` carries `name` and `description` frontmatter. One of the Python
+`ruff --select E9,F` pass over every script, a check that every `SKILL.md`
+carries `name` and `description` frontmatter, and a check that nothing under
+`skills/` reaches outside its own folder with `../`. One of the Python
 suites (`test_constraints.py`) is the prose gate: no em dashes, British
 English, no trailing full stops on headings, and nothing that looks
 client-specific - a real client name, a security-proxy host, a ticket id
@@ -45,11 +45,11 @@ list and what each check is for.
 ## What we will not accept
 
 **A delete, a bulk transition, or project or space administration.** The
-skills create, read and update - never delete. That boundary is the reason
+skill creates, reads and updates - never deletes. That boundary is the reason
 it is safe to let an agent drive them, and `jira bulk` has no rollback
 precisely because it cannot delete what it made. A pull request that adds a
-destructive call, or a `--force` on `confluence update` or
-`confluence-publish`'s round-trip gate, will be declined.
+destructive call, or a `--force` on `confluence-pages.sh update` or
+`publish.sh`'s round-trip gate, will be declined.
 
 **A token on a command line, or in another process's argv.** `curl` reads
 the credentials from a 0600 config file, and `jq` reads a token being saved

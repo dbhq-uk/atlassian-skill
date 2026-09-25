@@ -1,5 +1,5 @@
 #!/bin/bash
-# Shared configuration and request helpers for the jira and confluence skills.
+# Shared configuration and request helpers for every script in this skill.
 # Sourced by the other scripts; not run directly.
 #
 # The API token never reaches the command line. curl reads the URL, the

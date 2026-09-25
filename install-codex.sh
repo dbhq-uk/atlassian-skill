@@ -1,5 +1,5 @@
 #!/bin/bash
-# Install every skill in this pack into ~/.codex/skills/ for Codex.
+# Install the atlassian skill into ~/.codex/skills/ for Codex.
 #
 # Codex does not substitute ${CLAUDE_SKILL_DIR}, so this script rewrites that
 # variable to each skill's installed Codex path and symlinks the supporting
@@ -34,33 +34,53 @@ fi
 echo
 
 mkdir -p "$SKILLS_ROOT"
+
+# --- Retire the old layout ---
+# Until 25 Sep 2026 this repository shipped three skills - jira, confluence
+# and confluence-publish - and a _shared folder all three reached with ../.
+# They are one skill now, atlassian. An earlier run of this installer left
+# _shared as a symlink, and each of the three as a folder holding a
+# rewritten SKILL.md beside symlinks into this repository. Those links now
+# point at folders that no longer exist, and the SKILL.md would still be
+# matched, so the old install is taken out.
+#
+# jira and confluence are ordinary names, so only what this installer made
+# is removed: a link to the old folder, or a folder whose scripts link
+# points at it and which holds nothing but links and a SKILL.md. Anything
+# else is the user's own and is left alone. Nothing is removed with rm -r.
+retire_old_install() {
+  local old="$1" target="$SKILLS_ROOT/$1" entry
+  if [ -L "$target" ]; then
+    case "$(readlink "$target")" in
+      */skills/"$old") rm -f "$target" ;;
+      *) return 0 ;;
+    esac
+  elif [ -d "$target" ]; then
+    case "$(readlink "$target/scripts" 2>/dev/null)" in
+      */skills/"$old"/scripts) ;;
+      *) return 0 ;;
+    esac
+    for entry in "$target"/* "$target"/.[!.]*; do
+      [ -e "$entry" ] || [ -L "$entry" ] || continue
+      [ -L "$entry" ] || [ "$(basename "$entry")" = "SKILL.md" ] || return 0
+    done
+    find "$target" -mindepth 1 -maxdepth 1 \( -type l -o -name SKILL.md \) -exec rm -f {} +
+    rmdir "$target"
+  else
+    return 0
+  fi
+  echo "Removing '$old' - it is part of the atlassian skill now"
+}
+for old in jira confluence confluence-publish _shared; do
+  retire_old_install "$old"
+done
+
 for src in "$SCRIPT_DIR"/skills/*/; do
   src="${src%/}"
   name="$(basename "$src")"
   target="$SKILLS_ROOT/$name"
+  [ -f "$src/SKILL.md" ] || continue
   echo "Installing '$name' -> $target"
-
-  # _shared is not a skill - it has no SKILL.md, because nothing installs it
-  # on its own; jira, confluence and confluence-publish all reach it as
-  # ${CLAUDE_SKILL_DIR}/../_shared/. There is no ${CLAUDE_SKILL_DIR} inside it
-  # to rewrite, so it is symlinked whole, the same way install.sh does it for
-  # Claude Code - not stepped into the SKILL.md-rewrite path below, which
-  # would fail on the file every other directory here has and this one does
-  # not.
-  if [ ! -f "$src/SKILL.md" ]; then
-    # Same whole-directory symlink install.sh does for every directory
-    # (see its own comment) - so it needs the same guard: only ever remove
-    # a symlink here, never a real directory, in case $target is the
-    # user's own same-named directory rather than a prior install.
-    if [ -e "$target" ] && [ ! -L "$target" ]; then
-      echo "Error: $target already exists and is not a symlink - not touching it." >&2
-      echo "Fix: move or remove it yourself, then re-run this installer." >&2
-      exit 1
-    fi
-    rm -f "$target"
-    ln -sfn "$src" "$target"
-    continue
-  fi
 
   mkdir -p "$target"
   # Clear what a previous install left before linking what this one needs.
