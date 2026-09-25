@@ -48,8 +48,9 @@ list and what each check is for.
 skill creates, reads and updates - never deletes. That boundary is the reason
 it is safe to let an agent drive them, and `jira bulk` has no rollback
 precisely because it cannot delete what it made. A pull request that adds a
-destructive call, or a `--force` on `confluence-pages.sh update` or
-`publish.sh`'s round-trip gate, will be declined.
+destructive call, or a `--force` on `confluence-pages.sh update`'s
+round-trip gate or on `publish.sh`'s check for an edit made in Confluence,
+will be declined.
 
 **A token on a command line, or in another process's argv.** `curl` reads
 the credentials from a 0600 config file, and `jq` reads a token being saved

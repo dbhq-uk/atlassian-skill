@@ -69,6 +69,7 @@ Standard library only.
 
 import argparse
 import html
+import json
 import re
 import sys
 
@@ -242,8 +243,13 @@ def _inline(text):
     return out.replace(HARD_BREAK, "<br>")
 
 
-def _image(line):
-    """A line holding only ![alt](url), as a figure, or a ConversionError."""
+def _image(line, local_images=None):
+    """A line holding only ![alt](url), as a figure, or a ConversionError.
+
+    local_images, when given, is how publish.sh supplies a local image: a
+    function taking the path as written and returning the (media id,
+    collection) it was uploaded as. Without it, a local image is refused.
+    """
     alt, target = IMAGE_LINE.match(line).groups()
     if re.search(r"\s", target.strip()):
         raise ConversionError(
@@ -252,12 +258,21 @@ def _image(line):
         )
     target = target.strip()
     if not _URL_SCHEME.match(target):
+        if local_images is not None:
+            media_id, collection = local_images(target)
+            bits = ['data-media-type="file"', f'data-id="{html.escape(media_id)}"',
+                    f'data-collection="{html.escape(collection)}"']
+            if alt:
+                bits.append(f'data-alt="{html.escape(alt)}"')
+            return ('<figure data-type="media-single" data-layout="center">'
+                    f'<div data-type="media" {" ".join(bits)}></div></figure>')
         raise ConversionError(
             f"Relative image: {line.strip()}. This converter does not upload "
             f"files, and a local path does not resolve on a Confluence page. "
-            f"Fix: upload it with attachments.sh upload <page-id> <file> and "
-            f"write a <figure> with the media id it prints (see publish.md, "
-            f"Images), or use an absolute https URL."
+            f"Fix: publish the file with publish.sh, which uploads a local "
+            f"image as an attachment itself, or upload it with attachments.sh "
+            f"upload <page-id> <file> and write a <figure> with the media id "
+            f"it prints (see publish.md, Images), or use an absolute https URL."
         )
     if not target.lower().startswith(("https://", "http://")):
         raise ConversionError(
@@ -316,8 +331,11 @@ def _starts_a_block(lines, i):
     )
 
 
-def md_to_htmlplus(markdown):
-    """Convert markdown to a Confluence HTML+ fragment."""
+def md_to_htmlplus(markdown, local_images=None):
+    """Convert markdown to a Confluence HTML+ fragment.
+
+    local_images: see _image. Passed on to a blockquote's own conversion.
+    """
     lines = markdown.replace("\r\n", "\n").split("\n")
     out, i = [], 0
     while i < len(lines):
@@ -402,11 +420,11 @@ def md_to_htmlplus(markdown):
             while i < len(lines) and BLOCKQUOTE.match(lines[i]):
                 inner.append(BLOCKQUOTE.match(lines[i]).group(1))
                 i += 1
-            out.append(f"<blockquote>{md_to_htmlplus(chr(10).join(inner))}</blockquote>")
+            out.append(f"<blockquote>{md_to_htmlplus(chr(10).join(inner), local_images)}</blockquote>")
             continue
 
         if IMAGE_LINE.match(line):
-            out.append(_image(line))
+            out.append(_image(line, local_images))
             i += 1
             continue
 
@@ -493,8 +511,27 @@ def md_to_htmlplus(markdown):
     return "".join(out)
 
 
+def local_image_paths(markdown):
+    """Every local image the markdown shows, as written, first use first."""
+    seen = []
+
+    def record(path):
+        if path not in seen:
+            seen.append(path)
+        return "placeholder", "placeholder"
+
+    md_to_htmlplus(markdown, record)
+    return seen
+
+
 def main(argv=None):
-    argparse.ArgumentParser(description=__doc__.splitlines()[0]).parse_args(argv)
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--list-images", action="store_true",
+                        help="print each local image path the markdown shows, and stop")
+    parser.add_argument("--image-map", metavar="FILE",
+                        help='JSON {"path as written": {"id": ..., "collection": ...}} '
+                             "for the local images publish.sh uploaded")
+    args = parser.parse_args(argv)
     # ConversionError is caught here, not left to propagate, for the same
     # reason htmlplus.py's own CLI catches it: this runs at the front of
     # publish.sh's pipeline, piped straight into md_to_htmlplus.py, and an
@@ -503,7 +540,21 @@ def main(argv=None):
     # tool. A one-line "Error: ..." naming the offending line, and exit 1,
     # is what the caller can actually act on.
     try:
-        sys.stdout.write(md_to_htmlplus(sys.stdin.read()))
+        markdown = sys.stdin.read()
+        if args.list_images:
+            for path in local_image_paths(markdown):
+                print(path)
+            return 0
+        local_images = None
+        if args.image_map:
+            with open(args.image_map, encoding="utf-8") as f:
+                uploaded = json.load(f)
+
+            def local_images(path):
+                if path not in uploaded:
+                    raise ConversionError(f"Local image {path} was not uploaded.")
+                return uploaded[path]["id"], uploaded[path]["collection"]
+        sys.stdout.write(md_to_htmlplus(markdown, local_images))
     except ConversionError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

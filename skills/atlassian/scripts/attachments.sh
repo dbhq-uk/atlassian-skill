@@ -17,10 +17,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
     cat >&2 <<'USAGE'
-Usage: attachments.sh upload <page-id> <file>
+Usage: attachments.sh upload <page-id> <file> [--comment <text>]
+       attachments.sh find   <page-id> <filename>
 
-Uploads the file as an attachment on that page and prints, tab separated:
+upload attaches the file to that page and prints, tab separated:
   <media-id>  <collection>
+
+find prints the same two, plus the attachment's comment, for the attachment
+of that name already on the page - or nothing, if there is none. Read only.
+publish.sh uses it with a content hash in the comment, so an image already
+on the page is not uploaded again.
 
 Feed both into a figure:
   <figure data-type="media-single" data-layout="center" data-width="80">
@@ -40,9 +46,15 @@ USAGE
     exit 1
 }
 
-[ "${1:-}" = "upload" ] || usage
+CMD="${1:-}"
+[ "$CMD" = "upload" ] || [ "$CMD" = "find" ] || usage
 PAGE_ID="${2:-}"; FILE="${3:-}"
 [ -n "$PAGE_ID" ] && [ -n "$FILE" ] || usage
+COMMENT=""
+if [ "$CMD" = "upload" ] && [ $# -gt 3 ]; then
+    [ "${4:-}" = "--comment" ] && [ $# -eq 5 ] || usage
+    COMMENT="$5"
+fi
 case "$PAGE_ID" in
     ''|*[!0-9]*)
         echo "Error: '$PAGE_ID' is not a valid page id." >&2
@@ -51,6 +63,18 @@ case "$PAGE_ID" in
         exit 1
         ;;
 esac
+if [ "$CMD" = "find" ]; then
+    require_config
+    NAME=$(jq -rn --arg v "$FILE" '$v | @uri')
+    api GET "/wiki/api/v2/pages/$PAGE_ID/attachments?filename=$NAME&limit=1"
+    api_ok || api_fail "$API_BODY" "listing the attachments on page $PAGE_ID"
+    printf '%s' "$API_BODY" | jq -r --arg c "contentId-$PAGE_ID" '
+        .results[0] // empty
+        | select(.fileId != null)
+        | "\(.fileId)\t\($c)\t\(.comment // "")"'
+    exit 0
+fi
+
 [ -f "$FILE" ] || { echo "Error: no such file: $FILE" >&2; exit 1; }
 
 # $FILE lands verbatim in a curl -K config file as `form = "file=@$FILE"`,
@@ -62,7 +86,7 @@ esac
 # repo's own images is this skill's documented job, so the filename here is
 # exactly as attacker-controlled as PATH is in api() - refused the same way,
 # before the config file is ever built.
-case "$FILE" in
+case "$FILE$COMMENT" in
     *'"'*|*$'\n'*)
         echo "Error: refusing to upload this file." >&2
         echo "Cause: its path contains a double quote or a newline, which can break out of the curl config file and inject a second, attacker-chosen request that still carries the site's credentials." >&2
@@ -100,6 +124,7 @@ trap 'rm -f "$CFG"' EXIT INT TERM HUP
     printf 'header = "Accept: application/json"\n'
     printf 'form = "file=@%s"\n' "$FILE"
     printf 'form = "minorEdit=true"\n'
+    [ -z "$COMMENT" ] || printf 'form = "comment=%s"\n' "$COMMENT"
     printf 'silent\n'
     printf 'show-error\n'
     printf 'write-out = "\\n%%{http_code}"\n'

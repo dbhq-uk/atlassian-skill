@@ -61,6 +61,12 @@ measurement now passes cleanly. Neither guard has a bypass - there is no
 `--force` anywhere in this skill. A refusal needs a human decision in
 the Confluence UI, not a flag.
 
+`publish.sh` also replaces the whole body, with the file. It refuses when the
+page's latest version was not written by a publish - somebody edited the page
+in Confluence - until that exact version is confirmed with `--base-version`.
+It uploads the local images a file shows as page attachments, and nothing
+else.
+
 ### Scope of the token
 
 The API token you give it is a full-account token - Atlassian does not offer
