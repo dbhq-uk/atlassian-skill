@@ -180,9 +180,10 @@ jq empty .claude-plugin/plugin.json
 
 CI runs the Python test suite and the constraint gate above (`.github/workflows/validate.yml`,
 job `validate`), a check that nothing under `skills/` reaches outside its folder
-with `../`, plus a repository-wide shellcheck and `ruff --select E9,F` pass over every
-script (job `lint`, shared across every DBHQ skill repo - see that job's own comment for why it
-is scoped the way it is) and the SKILL.md frontmatter check.
+with `../`, plus the shared skill floor (job `floor`, defined once in `dbhq-uk/.github` and
+called by every DBHQ skill repo - see `skill-floor.yml` there for why each check is scoped the
+way it is): a repository-wide shellcheck and `ruff --select E9,F` pass over every script, and
+the SKILL.md frontmatter parsed as YAML.
 
 ## History
 
