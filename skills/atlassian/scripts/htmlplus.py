@@ -2218,94 +2218,99 @@ def adf_to_markdown(doc):
 
 # --- the Jira profile ---
 
-# Node and mark types Confluence renders and Jira does not. A description
-# carrying a Confluence-only node is accepted by the API and then shows as
-# nothing on the issue; a Confluence-only mark would lose the formatting on
-# the text it wraps. Either way it looks like it worked. Refused here
-# instead. No mark type is in this set today - see the note below on why
-# _walk still has to be able to reach one.
+# Jira's ADF profile is narrower than Confluence's. A description carrying a
+# node Jira does not support can be accepted by the API and then show as
+# nothing on the issue, which looks like it worked. So html_to_adf_for_jira
+# lets through only the node and mark types Atlassian lists for Jira, and
+# refuses the rest by name.
 #
-# This check (in html_to_adf_for_jira, below) runs against the tree
-# html_to_adf already returned, not against the HTML+ source text - and that
-# is what makes it safe against opaque passthrough for a NODE, with no
-# extra handling. An opaque HTML+ element's data-adf is decoded by
-# _decode_adf before the node is ever appended to the tree (see the
-# ADF_OPAQUE branch in _Builder.handle_starttag), so a status lozenge or a
-# decision list smuggled in through
-# <div data-type="adf-opaque" data-adf="..."> comes back out with its
-# genuine "type" restored - "status", "decisionList" - exactly as if it had
-# been written with the native <span data-type="status"> syntax.
+# The list is Atlassian's own, read on 25 September 2026 from
+# https://developer.atlassian.com/cloud/jira/platform/apis/document/structure/
+# (the "Nodes" and "Marks" sections). Until then this was a hand-kept
+# denylist, CONFLUENCE_ONLY, that refused status, expand and nestedExpand -
+# all three on Atlassian's list - with no live test behind it.
 #
-# That property only protects this function where _walk actually looks -
-# and the first version of _walk only descended into a node's "content",
-# never into a text node's "marks". _decode_adf restores an opaque mark's
-# genuine type the same way it restores an opaque node's (see the
-# ADF_OPAQUE_MARK branch in the same method), so a Confluence-only mark
-# smuggled in through <span data-type="adf-opaque-mark"> would have reached
-# the tree correctly typed and then sailed straight past this check anyway,
-# because nothing ever read the marks list it landed in. CONFLUENCE_ONLY
-# holds no mark today, so nothing was actually smuggled by this gap - but
-# the day a mark is added here, the refusal would have silently never
-# fired, with no error to say why. _walk now yields a node's marks too,
-# closing that before this set has a real mark member to expose it.
-# Proven, not just argued, by TestJiraProfile below - for a node with named
-# HTML+ support (status), for a node with none (bodiedExtension, which can
-# only ever arrive opaquely), and for a mark forced into this set the same
-# way (annotation, which likewise has no named HTML+ support here and so
-# can also only ever arrive opaquely).
+# taskList and taskItem are the one inference. The page lists blockTaskItem
+# but not taskList, and the vendored schema (adf-schema/full.json) allows a
+# blockTaskItem only inside a taskList, so a listed blockTaskItem implies a
+# taskList around it. taskItem is a taskList's ordinary child. They pass,
+# and they are kept apart here so nobody mistakes them for listed types.
 #
-# bodiedExtension belongs in this set for a sharper reason than the other
-# six: this converter has no named HTML+ syntax for it at all (unlike
-# status/decisionList/decisionItem/expand/layoutSection/layoutColumn, which
-# are also Confluence-only but do have one), so the only way a bodiedExtension
-# node can ever reach this function is through the opaque wrapper. It is the
-# case that actually exercises the passthrough path rather than merely
-# being consistent with it.
-#
-# nestedExpand joined when <details> inside a table cell started converting to
-# it, as ADF requires, rather than to expand: the Jira profile had refused
-# that same HTML+ as an expand, and this keeps it refused.
-CONFLUENCE_ONLY = {"status", "decisionList", "decisionItem", "expand",
-                   "nestedExpand", "layoutSection", "layoutColumn",
-                   "bodiedExtension"}
+# No live check has been run against this profile yet. docs/jira-profile.md
+# says how to run one and records the result. TestJiraProfile pins these
+# sets, so changing them fails until that check is repeated.
+JIRA_LISTED_NODES = frozenset({
+    # the root
+    "doc",
+    # top-level block nodes
+    "blockquote", "bodiedSyncBlock", "bulletList", "codeBlock", "expand",
+    "heading", "mediaGroup", "mediaSingle", "orderedList", "panel",
+    "paragraph", "rule", "syncBlock", "table", "multiBodiedExtension",
+    # child block nodes
+    "blockTaskItem", "extensionFrame", "listItem", "media", "nestedExpand",
+    "tableCell", "tableHeader", "tableRow",
+    # inline nodes
+    "date", "emoji", "hardBreak", "inlineCard", "mention", "status", "text",
+    "mediaInline",
+})
+JIRA_INFERRED_NODES = frozenset({"taskList", "taskItem"})
+JIRA_NODES = JIRA_LISTED_NODES | JIRA_INFERRED_NODES
+JIRA_MARKS = frozenset({
+    "border", "code", "em", "link", "strike", "strong", "subsup",
+    "textColor", "underline",
+})
+JIRA_NODE_LIST_URL = (
+    "https://developer.atlassian.com/cloud/jira/platform/apis/document/structure/"
+)
 
 
 def _walk(node):
-    """Yield node, then every node reachable through its "content" list,
-    and every mark reachable through its "marks" list.
+    """Yield ("node", node), then every node reachable through its "content"
+    list and every mark reachable through its "marks" list, each tagged
+    "node" or "mark".
 
-    Walks the parsed ADF tree, which is what makes the opaque-passthrough
-    case safe for both a smuggled node and a smuggled mark - see the
-    CONFLUENCE_ONLY comment above. The marks branch matters even though a
-    mark itself never has content or further marks of its own to recurse
-    into: without it, a mark's restored type is never visited at all.
+    Walks the parsed ADF tree, not the HTML+ source, and that is what makes
+    the check safe against opaque passthrough. _decode_adf restores an
+    opaque element's real "type" before it reaches the tree (see the
+    ADF_OPAQUE and ADF_OPAQUE_MARK branches in _Builder.handle_starttag), so
+    a decision list smuggled in through <div data-type="adf-opaque"> arrives
+    here as "decisionList", exactly as if it had been written natively.
+
+    The marks branch matters. The first version of this walk only followed
+    "content", so a mark's restored type was in the tree but never visited,
+    and a refused mark would have passed without a word.
     """
-    yield node
+    yield "node", node
+    for mark in node.get("marks", []):
+        yield "mark", mark
     for child in node.get("content", []):
         yield from _walk(child)
-    for mark in node.get("marks", []):
-        yield from _walk(mark)
 
 
 def html_to_adf_for_jira(fragment):
-    """Convert HTML+ to ADF for a Jira issue field, refusing Confluence nodes.
+    """Convert HTML+ to ADF for a Jira issue field, refusing what Jira lacks.
 
-    Jira's ADF profile is narrower than Confluence's own. A status lozenge
-    and a decision list are Confluence nodes; Jira renders neither, and a
-    description containing one is accepted by the API and then displays as
-    nothing at all - the worst kind of failure, because it looks like it
-    worked. This is the same html_to_adf everything else in this file uses,
-    with that one further check on the result.
+    The same html_to_adf everything else in this file uses, with one further
+    check on the result: every node and mark must be on Atlassian's Jira
+    list (JIRA_NODES and JIRA_MARKS above).
     """
     doc = html_to_adf(fragment)
-    for node in _walk(doc):
-        t = node.get("type")
-        if t in CONFLUENCE_ONLY:
+    for kind, item in _walk(doc):
+        t = item.get("type")
+        if kind == "node" and t not in JIRA_NODES:
             raise ConversionError(
-                f"{a_or_an(t).capitalize()} {t} is Confluence-only and "
-                f"Jira does not render it. The API would accept the "
-                f"description and show nothing. Use a panel, a table, a "
-                f"code block or a task list instead."
+                f"{a_or_an(t).capitalize()} {t} is not on Atlassian's list of "
+                f"the nodes Jira supports, so the API may accept the "
+                f"description and show nothing where it should be. Use a "
+                f"panel, a table, a code block, a heading or a list instead. "
+                f"The list: {JIRA_NODE_LIST_URL}"
+            )
+        if kind == "mark" and t not in JIRA_MARKS:
+            raise ConversionError(
+                f"{a_or_an(t).capitalize()} {t} mark is not on Atlassian's "
+                f"list of the marks Jira supports, so Jira may drop that "
+                f"formatting without saying so. Remove it. "
+                f"The list: {JIRA_NODE_LIST_URL}"
             )
     return doc
 
