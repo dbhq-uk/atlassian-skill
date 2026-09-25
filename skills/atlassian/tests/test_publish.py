@@ -383,6 +383,30 @@ class TestMarkdownToHtmlPlus(unittest.TestCase):
         self.assertIn("<p>Before.</p>", out)
         self.assertIn("<p>After.</p>", out)
 
+    def test_an_inline_component_on_its_own_line_gets_its_own_paragraph(self):
+        # ADF has no room for a status, a date or an inline card straight
+        # under the document. Following "give it its own line" used to
+        # produce exactly that.
+        sys.path.insert(0, str(SCRIPTS))
+        from htmlplus import html_to_adf
+
+        for line, node in (
+            ('<span data-type="status" data-color="green">Built</span>', "status"),
+            ('<time datetime="2026-09-08">8 September 2026</time>', "date"),
+            ('<a href="https://example.com/p" data-card-appearance="inline"></a>',
+             "inlineCard"),
+        ):
+            with self.subTest(node=node):
+                out = md_to_htmlplus(f"Before.\n\n{line}\n\nAfter.\n")
+                self.assertIn(f"<p>{line}</p>", out)
+                doc = html_to_adf(out)
+                self.assertEqual(doc["content"][1]["type"], "paragraph")
+                self.assertEqual(doc["content"][1]["content"][0]["type"], node)
+
+    def test_a_block_card_on_its_own_line_is_not_wrapped(self):
+        line = '<a href="https://example.com/p" data-card-appearance="block"></a>'
+        self.assertEqual(md_to_htmlplus(line + "\n"), line)
+
     def test_output_converts_cleanly_to_adf(self):
         sys.path.insert(0, str(SCRIPTS))
         from htmlplus import html_to_adf

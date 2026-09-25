@@ -64,7 +64,7 @@ Ordinary prose in markdown.
 More prose.
 ```
 
-**On its own line, not mid-sentence.** The same markup embedded inside running prose - `assignee is <span data-type="status" ...>unset</span> today` - is not detected as a tag and is escaped to inert, visible text instead of passed through as live HTML+. This converter cannot yet tell a real inline tag apart from a stray `<` a human never meant as markup, and guessing wrong there mis-renders prose silently - exactly the failure this whole converter exists to avoid. Give an inline component its own line, even a short one.
+**On its own line, not mid-sentence.** A line that holds only an inline component - a lozenge, a date, an inline card - becomes a paragraph of its own, because a page cannot hold an inline node outside one. The same markup embedded inside running prose - `assignee is <span data-type="status" ...>unset</span> today` - is not detected as a tag and is escaped to inert, visible text instead of passed through as live HTML+. This converter cannot yet tell a real inline tag apart from a stray `<` a human never meant as markup, and guessing wrong there mis-renders prose silently - exactly the failure this whole converter exists to avoid. Give an inline component its own line, even a short one.
 
 A fenced code block's language token is passed straight into a CSS class name (`language-<token>`) and accepted as written - any token, including one with punctuation in it (`` ```c++ ``, `` ```objective-c ``) - not restricted to a plain word.
 

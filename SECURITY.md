@@ -74,3 +74,9 @@ with.
 
 None. No packages are installed and no dependencies are pulled at runtime. It
 is bash calling `curl` and `jq`, and Python 3's standard library.
+
+One data file is vendored: Atlassian's published ADF JSON schema
+(`@atlaskit/adf-schema`, Apache-2.0), at
+`skills/atlassian/scripts/adf-schema/full.json` with its licence beside it. The
+converter reads it as plain JSON to check nesting. It is not code and nothing
+executes it.

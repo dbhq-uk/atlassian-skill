@@ -13,6 +13,7 @@ from htmlplus import adf_to_html, adf_to_markdown  # noqa: E402
 from htmlplus import _opaque_to_html, _opaque_mark_to_html  # noqa: E402
 from htmlplus import check_roundtrip, _first_roundtrip_difference  # noqa: E402
 from htmlplus import html_to_adf_for_jira, CONFLUENCE_ONLY, _walk  # noqa: E402
+import htmlplus  # noqa: E402
 
 
 class TestDocumentEnvelope(unittest.TestCase):
@@ -427,6 +428,152 @@ class TestOrphanTableAndCheckboxTags(unittest.TestCase):
         self.assertIn("task-list item", str(cm.exception))
 
 
+class TestTheSchemaIsTheRule(unittest.TestCase):
+    """Nesting is checked against Atlassian's published ADF schema, vendored
+    beside the converter. Each case below passed the hand-kept tables this
+    replaced, and the schema forbids every one."""
+
+    def _rejects(self, fragment, *expected):
+        with self.assertRaises(ConversionError) as cm:
+            html_to_adf(fragment)
+        for text in expected:
+            self.assertIn(text, str(cm.exception))
+
+    def test_the_content_models_come_from_the_vendored_schema(self):
+        self.assertTrue(htmlplus.ADF_SCHEMA_PATH.is_file())
+        self.assertEqual(htmlplus.ADF_SCHEMA_PATH.parent.name, "adf-schema")
+        self.assertTrue((htmlplus.ADF_SCHEMA_PATH.parent / "LICENSE").is_file())
+        # Spot checks against the schema's own definitions.
+        models = htmlplus.CONTENT_MODELS
+        self.assertEqual(models["bulletList"], {"listItem"})
+        self.assertIn("nestedExpand", models["tableCell"])
+        self.assertNotIn("expand", models["tableCell"])
+        self.assertNotIn("decisionList", models["listItem"])
+        self.assertIn("status", htmlplus.INLINE_TYPES)
+
+    def test_every_node_this_converter_writes_is_in_the_schema(self):
+        known = set(htmlplus.CONTENT_MODELS) | set(htmlplus.INLINE_TYPES) | {
+            "rule", "blockCard", "embedCard", "media"}
+        for node_type in htmlplus._NODE_ATTRS_MARKS:
+            self.assertIn(node_type, known)
+
+    def test_an_inline_node_never_sits_directly_under_the_document(self):
+        for fragment, node in (
+            ('<span data-type="status" data-color="green">ok</span>', "status"),
+            ("<br>", "hardBreak"),
+            ('<time datetime="2026-09-08">8 September</time>', "date"),
+            ('<a href="https://example.com/p" data-card-appearance="inline"></a>',
+             "inlineCard"),
+        ):
+            with self.subTest(node=node):
+                self._rejects(fragment, node, "Wrap it in a <p>")
+
+    def test_the_same_inline_node_inside_a_paragraph_is_fine(self):
+        doc = html_to_adf('<p><span data-type="status" data-color="green">ok</span></p>')
+        self.assertEqual(doc["content"][0]["content"][0]["type"], "status")
+
+    def test_a_task_list_cannot_sit_in_a_blockquote(self):
+        self._rejects(
+            '<blockquote><ul data-type="task-list"><li data-type="task-item">'
+            '<input type="checkbox"> x</li></ul></blockquote>',
+            "taskList", "blockquote",
+        )
+
+    def test_a_rule_cannot_sit_in_a_blockquote(self):
+        self._rejects("<blockquote><hr></blockquote>", "rule", "blockquote")
+
+    def test_a_decision_list_cannot_sit_in_a_list_item(self):
+        self._rejects(
+            '<ul><li><ul data-type="decision-list"><li data-type="decision-item" '
+            'data-state="DECIDED">x</li></ul></li></ul>',
+            "decisionList", "listItem",
+        )
+
+    def test_a_media_node_outside_a_figure_names_where_it_belongs(self):
+        self._rejects(
+            '<div data-type="media" data-id="abc" data-collection="c"></div>',
+            "media", "mediaSingle",
+        )
+
+    def test_a_nested_expand_cannot_be_made_wide(self):
+        self._rejects(
+            '<table><tbody><tr><td><details data-breakout-mode="wide">'
+            "<summary>s</summary><p>x</p></details></td></tr></tbody></table>",
+            "nested expand", "data-breakout-mode",
+        )
+
+    def test_a_nested_expand_round_trips_through_html(self):
+        fragment = (
+            "<table><tbody><tr><td><details><summary>More</summary>"
+            "<p>x</p></details></td></tr></tbody></table>"
+        )
+        doc = html_to_adf(fragment)
+        self.assertEqual(check_roundtrip(doc), (True, None))
+        self.assertIn("<details>", adf_to_html(doc))
+
+    def test_a_page_with_a_legacy_expand_in_a_cell_can_still_be_updated(self):
+        # An earlier version of this converter wrote expand, not
+        # nestedExpand, in a table cell. The nesting check would refuse that
+        # on the way back in, so it is carried as an opaque blob instead,
+        # exactly as it came, and the page still passes the gate.
+        doc = {"type": "doc", "version": 1, "content": [
+            {"type": "table", "content": [{"type": "tableRow", "content": [
+                {"type": "tableCell", "attrs": {}, "content": [
+                    {"type": "expand", "attrs": {"title": "Old"}, "content": [
+                        {"type": "paragraph", "content": [
+                            {"type": "text", "text": "x"}]}]}]}]}]}]}
+        self.assertIn('data-type="adf-opaque"', adf_to_html(doc))
+        self.assertEqual(check_roundtrip(doc), (True, None))
+
+    def test_a_page_with_a_top_level_status_can_still_be_updated(self):
+        # The shape the "lozenge on its own line" advice used to produce.
+        doc = {"type": "doc", "version": 1, "content": [
+            {"type": "status", "attrs": {"text": "ok", "color": "green"}}]}
+        self.assertEqual(check_roundtrip(doc), (True, None))
+
+
+class TestUnknownAttributesAreRefused(unittest.TestCase):
+    """An attribute an element does not take is refused, named - never
+    dropped. A misspelling used to change the page without a word."""
+
+    def _rejects(self, fragment, *expected):
+        with self.assertRaises(ConversionError) as cm:
+            html_to_adf(fragment)
+        for text in expected:
+            self.assertIn(text, str(cm.exception))
+
+    def test_the_british_spelling_of_data_color_is_refused_by_name(self):
+        self._rejects(
+            '<p><span data-type="status" data-colour="green">ok</span></p>',
+            'data-colour="green"', "data-color",
+        )
+
+    def test_a_misspelt_attribute_on_a_plain_element_is_refused(self):
+        self._rejects('<table data-widht="900"><tbody><tr><td><p>x</p></td>'
+                      '</tr></tbody></table>', "data-widht")
+
+    def test_a_data_type_on_an_element_that_routes_without_one_is_refused(self):
+        # <ul data-type="task-lists"> (a typo) used to become a bullet list.
+        self._rejects('<ul data-type="task-lists"><li><p>x</p></li></ul>',
+                      'data-type="task-lists"')
+
+    def test_a_valueless_attribute_is_named_without_a_value(self):
+        self._rejects('<details open><summary>s</summary><p>x</p></details>',
+                      "does not take open.")
+
+    def test_every_attribute_the_converter_writes_is_accepted(self):
+        # A fetched page's own HTML+ must always convert back.
+        fragment = (
+            '<p data-local-id="p1" data-align="center" data-indent-level="1">x</p>'
+            '<table data-width="900" data-layout="default" data-number-column="false" '
+            'data-display-mode="fixed" data-local-id="t1"><tbody><tr data-local-id="r1">'
+            '<td data-colwidth="900" data-background="#fff" data-local-id="c1">'
+            "<p>y</p></td></tr></tbody></table>"
+        )
+        doc = html_to_adf(fragment)
+        self.assertEqual(html_to_adf(adf_to_html(doc)), doc)
+
+
 class TestNesting(unittest.TestCase):
     """One case per row of the nesting table in references/html-patterns.md.
 
@@ -477,11 +624,24 @@ class TestNesting(unittest.TestCase):
             "panel", "panel",
         )
 
-    def test_expand_cannot_nest_in_an_expand(self):
+    def test_an_expand_inside_an_expand_is_a_nested_expand(self):
+        # ADF's expand takes a nestedExpand, never another expand.
+        doc = html_to_adf(
+            "<details><summary>a</summary><details><summary>b</summary>"
+            "<p>x</p></details></details>"
+        )
+        outer = doc["content"][0]
+        self.assertEqual(outer["type"], "expand")
+        self.assertEqual(outer["content"][0]["type"], "nestedExpand")
+        self.assertEqual(outer["content"][0]["attrs"]["title"], "b")
+
+    def test_a_third_level_of_expand_is_refused(self):
+        # A nestedExpand's own content model has no room for any expand.
         self._rejects(
             "<details><summary>a</summary><details><summary>b</summary>"
-            "<p>x</p></details></details>",
-            "expand", "expand",
+            "<details><summary>c</summary><p>x</p></details>"
+            "</details></details>",
+            "nestedExpand",
         )
 
     def test_expand_cannot_hold_a_layout_section(self):
@@ -562,7 +722,8 @@ class TestNesting(unittest.TestCase):
             "</td></tr></tbody></table>"
         )
         cell = doc["content"][0]["content"][0]["content"][0]
-        self.assertEqual(cell["content"][0]["type"], "expand")
+        # The schema's table_cell_content takes nestedExpand, not expand.
+        self.assertEqual(cell["content"][0]["type"], "nestedExpand")
 
     # -- Finding A: nodes appended directly bypassed the validator. A live
     # probe against a real Confluence site showed the v2 API itself only

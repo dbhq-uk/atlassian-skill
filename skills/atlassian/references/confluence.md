@@ -118,6 +118,8 @@ Error: A panel cannot contain a table. Close the panel and put the table after i
 
 that is the converter, not the server. Nothing was sent. Fix the body and retry.
 
+The nesting rules are Atlassian's own published ADF schema, which ships with the skill. An attribute an element does not take - a misspelt `data-colour`, say - is refused by name rather than dropped.
+
 It also rejects a `data-colwidth` that is not a plain number, and a column where some cells carry the attribute and others do not - Confluence silently resets that whole table to even columns, which reads as a formatting regression to everyone who sees the diff.
 
 ## Constraints

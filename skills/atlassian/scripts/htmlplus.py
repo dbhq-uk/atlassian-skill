@@ -15,6 +15,7 @@ Standard library only. No packages, no venv.
 import argparse
 import base64
 import json
+import pathlib
 import sys
 from html.parser import HTMLParser
 
@@ -91,134 +92,101 @@ SIMPLE_BLOCKS = {
     "blockquote": "blockquote",
 }
 
-# A sentinel for FORBIDDEN_CHILDREN entries whose content model is plain
-# text and nothing else - not even the other inline nodes (status, date, a
-# link card) that a heading or a task item can legally hold. codeBlock is
-# the only one: real ADF code blocks carry marks-free text, full stop. It
-# is kept distinct from the shared "inline content only" None entries below
-# rather than folded into their BLOCK_TYPES check, because that check does
-# not treat status/date/card children as a violation, and inside a
-# codeBlock they are one.
-TEXT_ONLY = "text-only"
-
-# What each container cannot directly contain, keyed by ADF node type.
-# Straight from the nesting table in references/html-patterns.md, which is in
-# turn ADF's own rules. Confluence rejects a violation with a descriptive
-# error after the call; this is what rejects it before one.
-FORBIDDEN_CHILDREN = {
-    "listItem": {"heading", "table", "blockquote", "panel", "expand",
-                 "layoutSection", "rule"},
-    "panel": {"table", "expand", "blockquote", "embedCard", "panel",
-              "layoutSection"},
-    "expand": {"expand", "layoutSection", "bodiedExtension"},
-    "tableCell": {"table", "layoutSection", "bodiedExtension"},
-    "tableHeader": {"table", "layoutSection", "bodiedExtension"},
-    # ADF blockquote content is paragraphs, lists and code blocks only -
-    # not headings, tables, panels, expands or layout sections either.
-    "blockquote": {"blockquote", "heading", "table", "panel", "expand",
-                   "layoutSection"},
-    "table": {"table"},
-    # Inline-content-only containers: any block child at all is a violation
-    # (the None sentinel - see _check_nesting). A paragraph shares it with
-    # heading/taskItem/decisionItem/caption below: earlier this had its own
-    # bespoke set here, on the reasoning that the shared sentinel would
-    # wrongly reject the non-block inline content a paragraph legitimately
-    # holds (status, date, inlineCard) - but none of those three are
-    # members of BLOCK_TYPES, so the None sentinel never touches them; it
-    # only ever fires on an actual block. The bespoke set was also an
-    # incomplete copy of BLOCK_TYPES - real, but silently accepted, gaps
-    # included a bulletList, a tableRow or a second paragraph spliced
-    # straight inside a paragraph, none of which were in it.
-    "paragraph": None,
-    "taskItem": None,
-    "decisionItem": None,
-    "heading": None,
-    # A caption's content model is inline text only (the same shape as a
-    # heading or a task item), not the codeBlock TEXT_ONLY sentinel below
-    # it - a caption can still hold, say, a status lozenge.
-    "caption": None,
-    "codeBlock": TEXT_ONLY,
-}
-
-# Containers whose ADF content model is an exact, closed set of allowed
-# child types - "only these, full stop" - rather than the "anything except
-# these few" shape FORBIDDEN_CHILDREN checks. A denylist cannot state this
-# kind of rule at all: nothing above stopped a <p> spliced straight under a
-# <ul>, or a <td> written straight under a <table> with the <tr> skipped,
-# because neither "p under bulletList" nor "tableCell under table" was ever
-# named as forbidden - the gap was in what the list didn't say, not in what
-# it said wrong.
+# What each ADF node may directly contain, read from Atlassian's published
+# ADF JSON schema: @atlaskit/adf-schema 57.6.7, dist/json-schema/v1/full.json,
+# Apache-2.0 (see adf-schema/LICENSE beside this file). Vendored rather than
+# fetched, so the converter runs offline and gives the same answer every
+# time, and read with the standard library - it is plain JSON Schema.
 #
-# Checked against the DIRECT parent only (see _check_nesting), never walked
-# up the whole open-block stack the way FORBIDDEN_CHILDREN is: a <p> two
-# levels under a <ul>, inside its own <li>, is exactly right, and a
-# stack-walking version of this check would wrongly reject it as "not a
-# listItem under a bulletList" even though its immediate parent is the
-# listItem, not the bulletList several levels up.
-#
-# Deliberately not exhaustive, and not a general ADF schema: a handful of
-# containers happen to have a content model this narrow, and this only
-# lists the ones where a gap was actually reachable by hand-authoring
-# through this parser. Most containers' content model is defined by what it
-# excludes, not what it allows, and stays on FORBIDDEN_CHILDREN above -
-# rewriting every one of those into an allow-list too would just be a
-# longer way of saying the same rule for no gain.
-ALLOWED_CHILDREN = {
-    "bulletList": {"listItem"},
-    "orderedList": {"listItem"},
-    "table": {"tableRow"},
-    "tableRow": {"tableCell", "tableHeader"},
-}
+# This replaced two hand-kept tables, a denylist of what a few containers
+# could not hold and an allowlist for a few more. Both had gaps, because a
+# rule nobody wrote down was a rule nobody checked: a decision list inside a
+# list item, a task list or a rule inside a blockquote, and a status
+# lozenge, a date or a <br> straight under the document all passed. The
+# schema states every content model, so every pair is now checked against
+# the source Atlassian publishes rather than against a copy of it.
+ADF_SCHEMA_PATH = pathlib.Path(__file__).resolve().parent / "adf-schema" / "full.json"
 
-# Every block node type this converter emits. Used for the inline-only check.
-BLOCK_TYPES = {
-    "paragraph", "heading", "table", "tableRow", "tableCell", "tableHeader",
-    "panel", "expand", "blockquote", "bulletList", "orderedList", "listItem",
-    "taskList", "taskItem", "decisionList", "decisionItem", "codeBlock",
-    "layoutSection", "layoutColumn", "rule", "blockCard", "embedCard",
-    "mediaSingle", "media",
-}
 
-# Containers whose ADF content model is blocks only - a bare text node sitting
-# straight inside one of these is invalid, even though the parser is happy to
-# hand it over. Confluence's own v2 API only rejects this for panel, and does
-# so with a bare 500 and a null detail; the rest fail just as surely, only
-# without telling anyone - the editor cannot represent bare text there and
-# silently repairs or mangles it on the next human edit.
-#
-# Widened from the original five (listItem, tableCell, tableHeader, panel,
-# blockquote) to every other container whose content model is exactly one
-# kind of block child and nothing else - taskList
-# (taskItem+), decisionList (decisionItem+), bulletList/orderedList
-# (listItem+), table (tableRow+), tableRow (tableCell|tableHeader+),
-# layoutSection (layoutColumn+), layoutColumn (block+) and expand (block+
-# past its title). codeBlock is deliberately not here even though it looks
-# block-only shaped: its content model is plain text, not blocks, so it
-# needs the opposite treatment and handle_data never checks it against
-# this set.
-#
-# This set now does double duty: handle_data also reads it to decide
-# whether whitespace-only text is inter-tag formatting to discard, or
-# content to keep. Without the wider set, the newline between two <li>
-# (parent bulletList at that point, not listItem, which already closed)
-# would have been kept as a stray text node - the very regression the
-# fix for the mark-order space-eating bug had to avoid reintroducing.
-#
-# mediaSingle belongs in this set for the same reason: its content is a
-# media leaf plus an optional caption, block-only the same way a listItem's
-# is, and every real published figure this converter was checked against,
-# in a live-site round-trip measurement, is written pretty-printed - a
-# newline and indentation between <div data-type="media"> and
-# <figcaption>. Without this entry that whitespace is content, not
-# formatting: it lands as a stray text node wedged between the media and
-# the caption, which is exactly the class of bug BLOCK_ONLY_PARENTS exists
-# to prevent for every other block-only container.
-BLOCK_ONLY_PARENTS = {"listItem", "tableCell", "tableHeader", "panel",
-                      "blockquote", "taskList", "decisionList",
-                      "bulletList", "orderedList", "table", "tableRow",
-                      "layoutSection", "layoutColumn", "expand",
-                      "mediaSingle"}
+def _load_content_models(path=ADF_SCHEMA_PATH):
+    """(content model per node type, the inline node types), from the schema.
 
+    The schema defines several variants of some nodes - a paragraph with no
+    marks, one with alignment, one with indentation - each its own
+    definition with the same "type". A parent's content lists the variants
+    it takes by reference. This collapses them back to node types: a parent
+    may hold a child type if it takes any variant of it. Marks are not
+    checked here; only which node may sit directly inside which.
+    """
+    defs = json.loads(path.read_text(encoding="utf-8"))["definitions"]
+
+    def name(ref):
+        return ref.rsplit("/", 1)[-1]
+
+    def node_type(key):
+        schema = defs[key]
+        enum = schema.get("properties", {}).get("type", {}).get("enum")
+        if enum:
+            return enum[0]
+        for part in schema.get("allOf", []):
+            if "$ref" in part:
+                return node_type(name(part["$ref"]))
+        return None
+
+    def types_in(schema):
+        found = set()
+        if "$ref" in schema:
+            key = name(schema["$ref"])
+            this = node_type(key)
+            found |= {this} if this else types_in(defs[key])
+        for part in schema.get("anyOf", []) + schema.get("oneOf", []):
+            found |= types_in(part)
+        return found
+
+    def content_schemas(key):
+        schema = defs[key]
+        found = []
+        if "content" in schema.get("properties", {}):
+            found.append(schema["properties"]["content"])
+        for part in schema.get("allOf", []):
+            if "$ref" in part:
+                found += content_schemas(name(part["$ref"]))
+            elif "content" in part.get("properties", {}):
+                found.append(part["properties"]["content"])
+        return found
+
+    def item_types(content):
+        if "$ref" in content:
+            return item_types(defs[name(content["$ref"])])
+        items = content.get("items", [])
+        found = set()
+        for item in items if isinstance(items, list) else [items]:
+            found |= types_in(item)
+        return found
+
+    models = {}
+    for key in defs:
+        this = node_type(key)
+        schemas = content_schemas(key) if this else []
+        for content in schemas:
+            models.setdefault(this, set()).update(item_types(content))
+    inline = types_in(defs["inline_node"])
+    return ({k: frozenset(v) for k, v in models.items()}, frozenset(inline))
+
+
+CONTENT_MODELS, INLINE_TYPES = _load_content_models()
+
+# Containers whose content is block nodes only, so bare text directly inside
+# one is invalid - a listItem, a table cell, a panel and the rest. Derived
+# from CONTENT_MODELS rather than listed: any container whose content model
+# has no room for a text node. handle_data reads it twice - to refuse bare
+# text there, and to drop the whitespace between two block siblings (the
+# newline between two <li>, say), which is formatting, not content. The
+# document itself is handled on its own in handle_data, with its own message.
+BLOCK_ONLY_PARENTS = frozenset(
+    node for node, model in CONTENT_MODELS.items()
+    if "text" not in model and node != "doc"
+)
 
 def a_or_an(word):
     """"a" or "an" before word, by the crude vowel-sound test.
@@ -434,6 +402,61 @@ def _decode_adf(payload):
     return value
 
 
+# Attributes, per element. An attribute an element does not take is refused,
+# named, rather than dropped: data-colour="green" on a status (British
+# spelling, in a British-English house style) used to give a neutral lozenge
+# with no error, and any misspelt data-* attribute vanished the same way.
+_LOCAL_ID = frozenset({"data-local-id", "data-local-id-null"})
+_BREAKOUT = frozenset({"data-breakout-mode", "data-breakout-width"})
+
+
+def _refuse_unknown_attrs(tag, dtype, a, allowed):
+    """ConversionError naming the first attribute of a not in allowed."""
+    unknown = sorted(set(a) - set(allowed))
+    if not unknown:
+        return
+    name = unknown[0]
+    shown = name if a[name] is None else f'{name}="{a[name]}"'
+    element = (f'<{tag} data-type="{dtype}">' if dtype and "data-type" in allowed
+               else f"<{tag}>")
+    takes = sorted(set(allowed) - {"data-type"})
+    raise ConversionError(
+        f"{element} does not take {shown}. It takes "
+        f"{', '.join(takes) if takes else 'no attributes'}. An attribute this "
+        f"converter does not know is refused rather than dropped - check the "
+        f"spelling."
+    )
+
+
+def _nesting_message(parent, child, allowed):
+    """The refusal for child directly inside parent, which cannot hold it."""
+    a_child = f"{a_or_an(child)} {child}"
+    the_child = f"{a_or_an(child).capitalize()} {child}"
+    if child in INLINE_TYPES and "paragraph" in allowed:
+        where = ("the top level of the document" if parent == "doc"
+                 else f"{a_or_an(parent)} {parent}")
+        return (f"{the_child} is inline, so it cannot sit directly in "
+                f"{where}. Wrap it in a <p>.")
+    if parent == "doc":
+        homes = sorted(p for p, m in CONTENT_MODELS.items() if child in m)
+        where = " or ".join(homes) if homes else "another node"
+        return (f"{the_child} cannot sit directly at the top level of the "
+                f"document. It belongs inside {where}.")
+    the_parent = f"{a_or_an(parent).capitalize()} {parent}"
+    if allowed == {"text"}:
+        return (f"{the_parent} takes plain text only, so it cannot contain "
+                f"{a_child}. Close the {parent} and put the {child} after it.")
+    if "text" in allowed:
+        return (f"{the_parent} takes inline content only, so it cannot "
+                f"contain {a_child}. Close the {parent} and put the {child} "
+                f"after it.")
+    if len(allowed) <= 3:
+        return (f"{the_parent} can only directly contain "
+                f"{' or '.join(sorted(allowed))}, not {a_child}.")
+    return (f"{the_parent} cannot contain {a_child}. Close the {parent} and "
+            f"put the {child} after it as a sibling.")
+
+
 class _Builder(HTMLParser):
     """Walks HTML+ and builds an ADF content list.
 
@@ -511,68 +534,20 @@ class _Builder(HTMLParser):
         self.blocks[-1]["content"].append(node)
 
     def _check_nesting(self, child_type):
-        """Reject an invalid parent/child pair, naming both.
+        """Refuse a child its direct parent's content model has no room for,
+        naming both.
 
-        Two checks, deliberately different in shape and in reach:
-
-        ALLOWED_CHILDREN first, against the DIRECT parent only - a closed
-        list of exactly what a handful of containers may hold, for the few
-        content models narrow enough that stating them positively is both
-        possible and clearer than listing everything else they exclude.
-
-        Then FORBIDDEN_CHILDREN, walked up the whole stack of open blocks,
-        innermost first, not only the immediate parent. A table nested
-        inside an expand nested inside a table cell is still a table inside
-        a table cell as far as ADF is concerned - the expand itself is a
-        perfectly legal home for a table, so a check that stopped at the
-        nearest ancestor would let that violation through undetected
-        (Confluence would still reject it, just after the call, which is
-        the exact failure mode this function exists to catch first). So
-        every open ancestor that has a rule in FORBIDDEN_CHILDREN gets
-        checked in turn; the walk only stops early when it finds a
-        violation to raise.
+        The direct parent only, because that is how the schema states every
+        rule. A table inside an expand inside a table cell is caught
+        without walking further up: the expand in the cell is a
+        nestedExpand (see the <details> branch), and a nestedExpand's own
+        content model has no room for a table.
         """
-        immediate_parent = self.blocks[-1].get("type")
-        if immediate_parent in ALLOWED_CHILDREN:
-            allowed = ALLOWED_CHILDREN[immediate_parent]
-            if child_type not in allowed:
-                names = " or ".join(sorted(allowed))
-                raise ConversionError(
-                    f"{a_or_an(immediate_parent).capitalize()} {immediate_parent} "
-                    f"can only directly contain {names}, not "
-                    f"{a_or_an(child_type)} {child_type}."
-                )
-
-        for ancestor in reversed(self.blocks):
-            parent_type = ancestor.get("type")
-            if parent_type not in FORBIDDEN_CHILDREN:
-                continue
-            forbidden = FORBIDDEN_CHILDREN[parent_type]
-            if forbidden is None:
-                if child_type in BLOCK_TYPES:
-                    raise ConversionError(
-                        f"{a_or_an(parent_type).capitalize()} {parent_type} "
-                        f"takes inline content only, so it cannot contain "
-                        f"{a_or_an(child_type)} {child_type}. Close the "
-                        f"{parent_type} and put the {child_type} after it."
-                    )
-                continue
-            if forbidden is TEXT_ONLY:
-                if child_type != "text":
-                    raise ConversionError(
-                        f"{a_or_an(parent_type).capitalize()} {parent_type} "
-                        f"takes plain text only, so it cannot contain "
-                        f"{a_or_an(child_type)} {child_type}. Close the "
-                        f"{parent_type} and put the {child_type} after it."
-                    )
-                continue
-            if child_type in forbidden:
-                raise ConversionError(
-                    f"{a_or_an(parent_type).capitalize()} {parent_type} "
-                    f"cannot contain {a_or_an(child_type)} {child_type}. "
-                    f"Close the {parent_type} and put the {child_type} "
-                    f"after it as a sibling."
-                )
+        parent = self.blocks[-1].get("type")
+        allowed = CONTENT_MODELS.get(parent)
+        if allowed is None or child_type in allowed:
+            return
+        raise ConversionError(_nesting_message(parent, child_type, allowed))
 
     def _close(self):
         if len(self.blocks) > 1:
@@ -646,6 +621,7 @@ class _Builder(HTMLParser):
             )
 
         if tag == "p":
+            _refuse_unknown_attrs(tag, dtype, a, _LOCAL_ID | {"data-align", "data-indent-level"})
             # localId, alignment and indentation are all round-trip
             # bookkeeping-or-formatting a live-site measurement found on a
             # third of real paragraphs (localId) and a smaller but real
@@ -665,10 +641,12 @@ class _Builder(HTMLParser):
                 node["marks"] = marks
             self._open(node)
         elif tag in HEADINGS:
+            _refuse_unknown_attrs(tag, dtype, a, _LOCAL_ID)
             attrs = {"level": HEADINGS[tag]}
             _set_local_id(attrs, a)
             self._open({"type": "heading", "attrs": attrs})
         elif tag == "code" and self.blocks[-1]["type"] == "codeBlock":
+            _refuse_unknown_attrs(tag, dtype, a, {"class"})
             # Inside a <pre>, <code> carries the language rather than an
             # inline mark - checked ahead of the generic INLINE_MARKS branch
             # below, which would otherwise claim "code" first every time.
@@ -682,10 +660,11 @@ class _Builder(HTMLParser):
                         cls[len("language-"):]
                     )
         elif tag in INLINE_MARKS:
+            _refuse_unknown_attrs(tag, dtype, a, ())
             if self.blocks[-1]["type"] == "codeBlock":
-                # A real ADF code block's text is marks-free, full stop
-                # (TEXT_ONLY, above) - but that check only ever saw the
-                # text node's *type*, never whether it carried marks, so
+                # A real ADF code block's text is marks-free, full stop -
+                # but the nesting check only ever sees the text node's
+                # *type*, never whether it carries marks, so
                 # a <strong> or <em> opened while still inside a <pre>
                 # pushed a mark that later attached to the text right past
                 # it: the nesting validator caught the wrong shape of
@@ -706,6 +685,7 @@ class _Builder(HTMLParser):
             self.marks.append(mark)
 
         elif tag == "br":
+            _refuse_unknown_attrs(tag, dtype, a, ())
             # A hard break - what shift-enter produces in the Confluence
             # editor, so a genuinely common element on a real page, not an
             # edge case. adf_to_html already emits <br> for a hardBreak
@@ -717,6 +697,7 @@ class _Builder(HTMLParser):
             self._append({"type": "hardBreak"})
 
         elif tag == "div" and dtype.startswith("panel-"):
+            _refuse_unknown_attrs(tag, dtype, a, {"data-type"} | _LOCAL_ID | {"data-panel-icon-id", "data-panel-icon", "data-panel-icon-text", "data-panel-color"})
             kind = dtype[len("panel-"):]
             if kind not in PANEL_TYPES:
                 raise ConversionError(
@@ -740,6 +721,7 @@ class _Builder(HTMLParser):
             self._open({"type": "panel", "attrs": attrs})
 
         elif tag == "span" and dtype == "status":
+            _refuse_unknown_attrs(tag, dtype, a, {"data-type", "data-color"} | _LOCAL_ID)
             colour = a.get("data-color", "neutral")
             if colour not in STATUS_COLOURS:
                 raise ConversionError(
@@ -755,6 +737,7 @@ class _Builder(HTMLParser):
             self._append(self._pending_status)
 
         elif tag == "ul" and dtype == "task-list":
+            _refuse_unknown_attrs(tag, dtype, a, {"data-type"} | _LOCAL_ID)
             # localId round-trips through data-local-id when present - see
             # the taskItem branch below for why this matters: proven live,
             # not assumed from the media/caption precedent alone. The key
@@ -775,6 +758,7 @@ class _Builder(HTMLParser):
                 node["attrs"] = attrs
             self._open(node)
         elif tag == "li" and dtype == "task-item":
+            _refuse_unknown_attrs(tag, dtype, a, {"data-type"} | _LOCAL_ID)
             # Confluence assigns every taskItem a real localId on save,
             # even when the create request sent none (the enclosing
             # taskList's own localId is left empty instead - the two do
@@ -790,6 +774,7 @@ class _Builder(HTMLParser):
             _set_local_id(attrs, a)
             self._open({"type": "taskItem", "attrs": attrs})
         elif tag == "input":
+            _refuse_unknown_attrs(tag, dtype, a, {"type", "checked"})
             # The checkbox carries the state of the task item it sits in -
             # checked or not, it must be inside one. Only the checked case
             # validated this at first: an unchecked <input type="checkbox">
@@ -807,6 +792,7 @@ class _Builder(HTMLParser):
                 self.blocks[-1]["attrs"]["state"] = "DONE"
 
         elif tag == "ul" and dtype == "decision-list":
+            _refuse_unknown_attrs(tag, dtype, a, {"data-type"} | _LOCAL_ID)
             # Same treatment as taskList above, for the same reason.
             node = {"type": "decisionList"}
             attrs = {}
@@ -815,6 +801,7 @@ class _Builder(HTMLParser):
                 node["attrs"] = attrs
             self._open(node)
         elif tag == "li" and dtype == "decision-item":
+            _refuse_unknown_attrs(tag, dtype, a, {"data-type", "data-state"} | _LOCAL_ID)
             state = a.get("data-state", "DECIDED")
             if state not in DECISION_STATES:
                 raise ConversionError(
@@ -829,17 +816,33 @@ class _Builder(HTMLParser):
             self._open({"type": "decisionItem", "attrs": attrs})
 
         elif tag == "details":
+            _refuse_unknown_attrs(tag, dtype, a, _LOCAL_ID | _BREAKOUT)
+            # ADF has two expands. A table cell and an expand take only the
+            # nested one, and everywhere else takes only the ordinary one,
+            # so the parent decides which this is. Where neither fits (a
+            # panel, a list item), it stays an expand and _check_nesting
+            # refuses it by that name.
+            parent_model = CONTENT_MODELS.get(self.blocks[-1].get("type"), ())
+            nested = "expand" not in parent_model and "nestedExpand" in parent_model
             attrs = {"title": ""}
             _set_local_id(attrs, a)
-            node = {"type": "expand", "attrs": attrs}
+            node = {"type": "nestedExpand" if nested else "expand", "attrs": attrs}
             marks = _breakout_marks(a)
+            if marks and nested:
+                raise ConversionError(
+                    "A nested expand (an expand inside a table cell or inside "
+                    "another expand) cannot be made wide. Remove "
+                    "data-breakout-mode and data-breakout-width."
+                )
             if marks:
                 node["marks"] = marks
             self._open(node)
         elif tag == "summary":
+            _refuse_unknown_attrs(tag, dtype, a, ())
             self._in_summary = True
 
         elif tag == "pre":
+            _refuse_unknown_attrs(tag, dtype, a, _LOCAL_ID | _BREAKOUT)
             # No "language" default here any more - a live-site measurement
             # found real codeBlocks never carry one at all (0 of 49 sampled;
             # 28 had no "attrs" key whatsoever). The <code class=
@@ -858,6 +861,7 @@ class _Builder(HTMLParser):
             self._open(node)
 
         elif tag == "time":
+            _refuse_unknown_attrs(tag, dtype, a, {"datetime"} | _LOCAL_ID)
             attrs = {"timestamp": _date_to_timestamp(a.get("datetime", ""))}
             _set_local_id(attrs, a)
             self._append({"type": "date", "attrs": attrs})
@@ -867,6 +871,9 @@ class _Builder(HTMLParser):
             href = a.get("href", "")
             appearance = a.get("data-card-appearance")
             if appearance:
+                _refuse_unknown_attrs(
+                    tag, dtype, a, {"href", "data-card-appearance"} | _LOCAL_ID
+                )
                 if appearance not in CARD_TYPES:
                     raise ConversionError(
                         f'data-card-appearance="{appearance}" is not a card. '
@@ -882,9 +889,11 @@ class _Builder(HTMLParser):
                 self._append(node)
                 self._in_card = True
             else:
+                _refuse_unknown_attrs(tag, dtype, a, {"href"})
                 self.marks.append({"type": "link", "attrs": {"href": href}})
 
         elif tag == "section" and dtype in LAYOUTS:
+            _refuse_unknown_attrs(tag, dtype, a, {"data-type"} | _BREAKOUT)
             node = {"type": "layoutSection", "_expected": LAYOUTS[dtype],
                     "_layout": dtype}
             marks = _breakout_marks(a)
@@ -892,6 +901,7 @@ class _Builder(HTMLParser):
                 node["marks"] = marks
             self._open(node)
         elif tag == "div" and dtype == "column":
+            _refuse_unknown_attrs(tag, dtype, a, {"data-type", "data-width"})
             # An even split is the fresh-authoring default (the shape this
             # converter has always produced with nothing else to go on),
             # but a real column's width is not always even - a live-site
@@ -910,6 +920,7 @@ class _Builder(HTMLParser):
             self._open({"type": "layoutColumn", "attrs": {"width": width}})
 
         elif tag == "hr":
+            _refuse_unknown_attrs(tag, dtype, a, _LOCAL_ID)
             node = {"type": "rule"}
             attrs = {}
             _set_local_id(attrs, a)
@@ -918,6 +929,7 @@ class _Builder(HTMLParser):
             self._append(node)
 
         elif tag in SIMPLE_BLOCKS:
+            _refuse_unknown_attrs(tag, dtype, a, _LOCAL_ID | ({"start"} if tag == "ol" else set()))
             # bulletList, orderedList, listItem and blockquote all carry a
             # localId on a fetched page (a live-site measurement: common on
             # every one of the four), so all four take it the same
@@ -937,6 +949,7 @@ class _Builder(HTMLParser):
             self._open(node)
 
         elif tag == "table":
+            _refuse_unknown_attrs(tag, dtype, a, {"data-width", "data-layout", "data-number-column", "data-display-mode"} | _LOCAL_ID)
             # attrs is omitted entirely, not left as an empty {}, when the
             # table has none of the below - a bare <table> with no
             # data-width/layout/localId etc. is a real, live-measured
@@ -988,9 +1001,11 @@ class _Builder(HTMLParser):
                 "widths": {},
             })
         elif tag in ("thead", "tbody", "tfoot"):
+            _refuse_unknown_attrs(tag, dtype, a, ())
             # Not ADF nodes. Rows sit directly on the table.
             pass
         elif tag == "tr":
+            _refuse_unknown_attrs(tag, dtype, a, _LOCAL_ID)
             if not self._table_stack:
                 raise ConversionError(
                     "<tr> found outside a <table>. A row must sit inside a "
@@ -1010,6 +1025,7 @@ class _Builder(HTMLParser):
             # decrements only these, not the whole occupied dict.
             frame["carried_over"] = set(frame["occupied"])
         elif tag in ("th", "td"):
+            _refuse_unknown_attrs(tag, dtype, a, {"colspan", "rowspan", "data-colwidth", "data-background"} | _LOCAL_ID)
             if not self._table_stack:
                 raise ConversionError(
                     f"<{tag}> found outside a <table>. A cell must sit "
@@ -1080,6 +1096,7 @@ class _Builder(HTMLParser):
             self._open({"type": node_type, "attrs": cell_attrs})
 
         elif tag == "figure" and dtype == "media-single":
+            _refuse_unknown_attrs(tag, dtype, a, {"data-type", "data-layout", "data-width", "data-width-type"})
             attrs_out = {"layout": a.get("data-layout", "center")}
             if "data-width" in a:
                 attrs_out["width"] = _parse_float(a["data-width"], "data-width")
@@ -1088,6 +1105,7 @@ class _Builder(HTMLParser):
             self._open({"type": "mediaSingle", "attrs": attrs_out})
 
         elif tag == "div" and dtype == "media":
+            _refuse_unknown_attrs(tag, dtype, a, {"data-type", "data-id", "data-collection", "data-media-type", "data-alt", "data-width", "data-height"} | _LOCAL_ID)
             media_id = a.get("data-id", "")
             collection = a.get("data-collection", "")
             if not media_id or not collection:
@@ -1123,6 +1141,7 @@ class _Builder(HTMLParser):
             self._media_stack.append(tag)
 
         elif tag == "figcaption":
+            _refuse_unknown_attrs(tag, dtype, a, _LOCAL_ID)
             # A live-site measurement found 19 of 35 real captions carry
             # an attrs.localId Confluence assigned; the rest carry no attrs
             # key at all. Both shapes are preserved - an omitted key here,
@@ -1137,6 +1156,7 @@ class _Builder(HTMLParser):
             self._open(node)
 
         elif tag in ("div", "span") and dtype == ADF_OPAQUE:
+            _refuse_unknown_attrs(tag, dtype, a, {"data-type", "data-adf"})
             # Rule 3: the nesting validator does not inspect an
             # opaque node's contents and does not reject it for its position
             # - it came from a real page, so it was already valid where it
@@ -1148,6 +1168,7 @@ class _Builder(HTMLParser):
             self._opaque_stack.append(tag)
 
         elif tag == "span" and dtype == ADF_OPAQUE_MARK:
+            _refuse_unknown_attrs(tag, dtype, a, {"data-type", "data-adf"})
             # An opaque mark wraps ordinary, editable HTML+ - only the mark
             # itself is unrecognised, not the content it applies to (rule 5).
             # Reuse the normal open-marks stack so wrapped text picks it up
@@ -1508,6 +1529,7 @@ _NODE_ATTRS_MARKS = {
     "heading": ({"level", "localId"}, frozenset()),
     "panel": ({"panelType", "localId"} | _CUSTOM_PANEL_ATTRS, frozenset()),
     "expand": ({"title", "localId"}, {"breakout"}),
+    "nestedExpand": ({"title", "localId"}, frozenset()),
     "codeBlock": ({"language", "localId"}, {"breakout"}),
     "taskList": ({"localId"}, frozenset()),
     "taskItem": ({"state", "localId"}, frozenset()),
@@ -1745,7 +1767,7 @@ def _inline_to_html(node):
 
 
 def _children_html(node):
-    return "".join(_node_to_html(c) for c in node.get("content", []))
+    return "".join(_node_to_html(c, node.get("type")) for c in node.get("content", []))
 
 
 def _inline_html(node):
@@ -1769,9 +1791,19 @@ def _node_marks_html(node):
     return ""
 
 
-def _node_to_html(node):
+def _node_to_html(node, parent="doc"):
     t = node.get("type")
     a = node.get("attrs", {})
+    # A node sitting where the schema has no room for it - an expand in a
+    # table cell written by an earlier version of this converter, a status
+    # lozenge straight under the document - would be refused by the nesting
+    # check on the way back in, so a page carrying one could never be
+    # updated. As an opaque blob it goes back exactly as it came, which is
+    # the same promise opaque passthrough makes for a node type this
+    # converter has no name for: never worse than leaving it alone.
+    model = CONTENT_MODELS.get(parent)
+    if model is not None and t not in model:
+        return _opaque_to_html(node)
     known = _NODE_ATTRS_MARKS.get(t)
     if known is not None and not _fully_modelled(node, *known):
         return _opaque_to_html(node)
@@ -1804,7 +1836,11 @@ def _node_to_html(node):
         extra = "" if not bits else " " + " ".join(bits)
         return (f'<div data-type="panel-{_escape_attr(a["panelType"])}"{extra}>'
                 f"{_children_html(node)}</div>")
-    if t == "expand":
+    if t in ("expand", "nestedExpand"):
+        # One HTML+ form for both. Which ADF node it becomes on the way back
+        # is decided by where it sits (see the <details> branch of
+        # handle_starttag), and the position check at the top of this
+        # function has already sent an expand in the wrong place to opaque.
         local_id = _local_id_attr(a)
         breakout = _node_marks_html(node)
         return (f'<details{local_id}{breakout}>'
@@ -2015,7 +2051,7 @@ def _node_to_html(node):
 
 def adf_to_html(doc):
     """Render an ADF document as an HTML+ fragment."""
-    return "".join(_node_to_html(n) for n in doc.get("content", []))
+    return "".join(_node_to_html(n, "doc") for n in doc.get("content", []))
 
 
 # --- ADF to markdown, one way only ---
@@ -2078,7 +2114,7 @@ def _node_to_md(node, depth=0):
                         for g in c.get("content", [])).strip()
             for c in node.get("content", [])
         )
-    if t == "expand":
+    if t in ("expand", "nestedExpand"):
         inner = "\n\n".join(_node_to_md(c) for c in node.get("content", []))
         return f'**{a.get("title", "")}**\n\n{inner}'
     if t == "blockquote":
@@ -2181,8 +2217,13 @@ def adf_to_markdown(doc):
 # node can ever reach this function is through the opaque wrapper. It is the
 # case that actually exercises the passthrough path rather than merely
 # being consistent with it.
+#
+# nestedExpand joined when <details> inside a table cell started converting to
+# it, as ADF requires, rather than to expand: the Jira profile had refused
+# that same HTML+ as an expand, and this keeps it refused.
 CONFLUENCE_ONLY = {"status", "decisionList", "decisionItem", "expand",
-                   "layoutSection", "layoutColumn", "bodiedExtension"}
+                   "nestedExpand", "layoutSection", "layoutColumn",
+                   "bodiedExtension"}
 
 
 def _walk(node):
