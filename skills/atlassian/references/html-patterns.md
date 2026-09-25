@@ -5,9 +5,15 @@ one of these to ADF and rejects anything it does not recognise, naming the
 element.
 
 The format maps one-to-one onto Atlassian Document Format, so it inherits
-ADF's nesting rules. The converter enforces them locally, before the call, so
-a violation names the offending element and its parent rather than arriving as
-a server error afterwards.
+ADF's nesting rules. The converter reads them from Atlassian's published ADF
+schema, which ships with it (`scripts/adf-schema/full.json`), and enforces them
+locally, before the call, so a violation names the offending element and its
+parent rather than arriving as a server error afterwards - or not arriving at
+all, since the API accepts most malformed documents.
+
+Attributes are checked too. Each element takes the attributes listed in its
+section below and no others. One this converter does not know - a misspelt
+`data-colour`, say - is refused by name rather than dropped.
 
 **Emit a body fragment only.** No `<html>`, `<body>` or `<head>` wrapper, and
 no Markdown code fences around it.
@@ -111,10 +117,12 @@ genuinely set by hand.
 </details>
 ```
 
-An expand takes almost any block content including tables and panels. It
-cannot nest inside another expand. Inside a table cell it is allowed, and
-this converter emits it as an ordinary `expand` node there too - not ADF's
-separate `nestedExpand` type, which this converter does not write.
+An expand takes almost any block content including tables and panels.
+
+Inside a table cell or inside another expand, the same `<details>` becomes
+ADF's `nestedExpand`, which is what those two places take. A nested expand
+holds less: no table, no card and no further expand, so a third level is
+refused. It cannot be made wide either.
 
 `<details>` also takes `data-local-id` and, on a fetched page,
 `data-breakout-mode` (see Code blocks above) for an expand stretched wide.
@@ -310,7 +318,7 @@ on a page fetched back from Confluence, `data-breakout-mode`
 (`wide`/`full-width`) with an optional `data-breakout-width` in pixels for a
 `wide` block resized past its default - the editor's own "make this wide"
 toggle. `data-wrap` is not a real attribute; this converter has no line-wrap
-toggle and silently drops it if written.
+toggle and refuses it, like any other attribute it does not know.
 
 ---
 
@@ -352,18 +360,22 @@ become an attachment chip.
 
 ## Nesting rules worth remembering
 
-These are the ones generated HTML trips over most:
+The schema is the rule, and the converter names the element and its parent
+when one is broken. These are the ones generated HTML trips over most:
 
-| Container | Cannot directly contain |
+| Container | Can directly contain |
 | --- | --- |
-| `<li>` | heading, table, blockquote, panel, expand, layout, rule |
-| Panel | table, expand, blockquote, embed card, another panel |
-| Expand | another expand, layout section, bodied extension |
-| Table cell | table, top-level expand, layout section, bodied extension |
-| Task / decision item, heading, caption | any block element; inline only |
+| The page itself | blocks only - a lozenge, a date, a `<br>` or an inline card needs a `<p>` around it |
+| `<li>` | paragraph, list, task list, code block, image |
+| Blockquote | paragraph, list, code block, image |
+| Panel | paragraph, heading, list, task or decision list, code block, rule, image, block card |
+| Expand | any block except a layout; an expand inside it becomes a nested expand |
+| Table cell | any block except a table or a layout; an expand inside it becomes a nested expand |
+| Nested expand | paragraph, heading, list, task or decision list, code block, rule, panel, blockquote, image |
+| Paragraph, heading, task or decision item, caption | inline content only |
 
 To attach a table or a panel to a list, close the list and put the block after
 it as a sibling.
 
-Self-nesting is disallowed for expand, blockquote, panel and table. Lists nest
-freely.
+A blockquote, a panel and a table cannot hold another of their own kind. An
+expand nests once, as a nested expand. Lists nest freely.

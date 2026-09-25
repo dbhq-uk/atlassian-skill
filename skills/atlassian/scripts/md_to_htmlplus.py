@@ -95,6 +95,15 @@ TABLE_SEP = re.compile(r"^\|[\s:|-]+\|$")
 # prose (a continuation line, a quoted snippet) is not a list marker and is
 # not this converter's business to refuse.
 INDENTED_LIST = re.compile(r"^[ \t]+(?:[-*]\s+|\d+\.\s+)")
+# A raw HTML+ line that opens with an inline element - a status lozenge, a
+# date, a <br>, an inline mark, a link or an inline card. ADF has no room for
+# an inline node straight under the document, so such a line is wrapped in a
+# <p> of its own. A block or embed card is a block and is left alone.
+INLINE_RAW = re.compile(
+    r"^\s*<(?:span|time|br|strong|b|em|i|code|s|del|u|sub|sup)\b"
+    r"|^\s*<a\b(?![^>]*data-card-appearance=[\"']?(?:block|embed))",
+    re.I,
+)
 
 
 class ConversionError(Exception):
@@ -245,13 +254,15 @@ def md_to_htmlplus(markdown):
             continue
 
         # Raw HTML+ passes straight through, which is how a source file
-        # expresses a panel, a lozenge or a layout.
+        # expresses a panel, a lozenge or a layout. A line that opens with an
+        # inline element gets a <p> of its own (see INLINE_RAW).
         if line.lstrip().startswith("<"):
             block = []
             while i < len(lines) and lines[i].strip():
                 block.append(lines[i])
                 i += 1
-            out.append("".join(block))
+            raw = "".join(block)
+            out.append(f"<p>{raw}</p>" if INLINE_RAW.match(raw) else raw)
             continue
 
         heading = HEADING.match(line)

@@ -130,7 +130,9 @@ column widths - and it emits the ADF the REST API takes. No MCP server, no
 vendor CLI, no network round trip to convert anything.
 
 It also validates, rejecting invalid nesting before anything is sent, naming
-the element:
+the element. The nesting rules come from Atlassian's own published ADF schema,
+which ships with the skill, and an attribute an element does not take is
+refused by name rather than dropped:
 
     Error: A panel cannot contain a table. Close the panel and put the table
     after it as a sibling.
@@ -349,6 +351,7 @@ all (`` ```c++ ``), not restricted to a plain word.
 | `skills/atlassian/scripts/atlassian-setup.sh` | Credential capture and verification |
 | `skills/atlassian/scripts/_common.sh` | Shared request, error, ADF and credential-migration helpers |
 | `skills/atlassian/scripts/htmlplus.py` | The HTML+ <-> ADF converter, the round-trip gate, and opaque passthrough |
+| `skills/atlassian/scripts/adf-schema/` | Atlassian's published ADF JSON schema (Apache-2.0), which the converter's nesting check reads |
 | `skills/atlassian/scripts/jira-meta.sh` | Projects, issue types, fields, priorities, read-only |
 | `skills/atlassian/scripts/jira-issues.sh` | Create, bulk create, get, search |
 | `skills/atlassian/scripts/confluence-search.sh` | Spaces, CQL and free-text search |

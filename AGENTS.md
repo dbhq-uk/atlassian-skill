@@ -74,7 +74,11 @@ edit was composed, and a mismatch is exactly what a concurrent edit produces.
 **4. Bodies are HTML+, converted locally to ADF.** Never markdown on the
 wire, never storage format, and no MCP server. `htmlplus.py` rejects invalid
 nesting locally before anything is sent, naming the element and its parent -
-not because the Confluence REST API can be trusted to catch it. Posted
+not because the Confluence REST API can be trusted to catch it. The nesting
+rules are read from Atlassian's published ADF schema, vendored at
+`scripts/adf-schema/full.json` (Apache-2.0, licence beside it), not kept by
+hand. An attribute an element does not take is refused by name, never
+dropped. Posted
 against a live site, it accepted five of six deliberately malformed
 documents; the one it rejected returned a bare `500` with no usable detail.
 Local validation is still correct, but the reason is not "the API rejects
