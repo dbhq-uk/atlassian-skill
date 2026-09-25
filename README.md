@@ -19,10 +19,12 @@ A free, open-source tool by [DBHQ](https://dbhq.uk) - documented at [skills.dbhq
 One agent skill for Atlassian Cloud, on one credential and with no MCP server.
 It does three jobs:
 
-- **Jira**: creates and reads Jira Cloud issues over the REST API v3. Ask your
-  agent to raise a ticket and it does, after checking the project key, the
-  issue type and the required fields against your Jira first, so the create
-  call is right the first time.
+- **Jira**: creates, reads and comments on Jira Cloud issues over the REST API
+  v3, and moves one issue at a time through its workflow. Ask your agent to
+  raise a ticket and it does, after checking the project key, the issue type
+  and the required fields against your Jira first, so the create call is right
+  the first time. A move is checked against the transitions the issue's
+  workflow offers before it is sent.
 - **Confluence**: searches, reads, creates and updates Confluence Cloud pages
   over the v2 REST API - with a stale-write guard on every update.
 - **Publish**: turns a repository's markdown file into a Confluence page,
@@ -272,6 +274,9 @@ cd ~/.claude/skills/atlassian/scripts
 ./jira-issues.sh create PAY Task "Summary" --field customfield_10050=Ops
 ./jira-issues.sh bulk PAY tickets.json --dry-run
 ./jira-issues.sh get PAY-12 --comments 10
+./jira-issues.sh comment PAY-12 "Deployed to staging."
+./jira-issues.sh transitions PAY-12       # where it can move from here
+./jira-issues.sh transition PAY-12 "In Progress" --dry-run
 ./jira-issues.sh search "assignee = currentUser() AND statusCategory != Done"
 ./jira-issues.sh mine
 ```
@@ -314,6 +319,13 @@ was not created goes to a remaining file (`tickets.json` gives
 Blank lines in a plain-text description become separate paragraphs. `bulk`
 has no `--description-file` equivalent - every description in a bulk file is
 plain text.
+
+`comment` takes plain text, or an HTML+ fragment with `--body-file`, held to
+Jira's node list like a description. `transition` moves one issue. It reads
+the transitions the issue's workflow offers first, and refuses a target that
+is not among them, one that matches two, or one whose screen needs a field
+such as a resolution. It prints the command that moves the issue back. There
+is no bulk transition.
 
 ### Confluence
 

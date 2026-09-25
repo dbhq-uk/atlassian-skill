@@ -1,6 +1,6 @@
 ---
 name: atlassian
-description: Jira Cloud and Confluence Cloud over the REST API, with an API token and no MCP server. Creates and reads Jira issues, searches, reads, creates and updates Confluence pages, and publishes a repository's markdown file to a Confluence page. Never deletes. Trigger on phrases like "jira", "raise a jira ticket", "create a jira ticket", "what's assigned to me in jira", "search jira", "JQL", "confluence", "the wiki", "what does the wiki say", "create a confluence page", "update that confluence page", "CQL", "publish this to confluence", "push the docs to the wiki", "sync these docs to confluence".
+description: Jira Cloud and Confluence Cloud over the REST API, with an API token and no MCP server. Creates, reads and comments on Jira issues and moves one through its workflow, searches, reads, creates and updates Confluence pages, and publishes a repository's markdown file to a Confluence page. Never deletes. Trigger on phrases like "jira", "raise a jira ticket", "create a jira ticket", "what's assigned to me in jira", "comment on the jira ticket", "move the jira ticket to done", "search jira", "JQL", "confluence", "the wiki", "what does the wiki say", "create a confluence page", "update that confluence page", "CQL", "publish this to confluence", "push the docs to the wiki", "sync these docs to confluence".
 ---
 
 # atlassian
@@ -15,7 +15,7 @@ Read the matching file before you run anything. Each one holds the commands, the
 
 | Task | Read |
 |---|---|
-| Create, read or search Jira issues | `${CLAUDE_SKILL_DIR}/references/jira.md` |
+| Create, read, search or comment on Jira issues, or move one to another status | `${CLAUDE_SKILL_DIR}/references/jira.md` |
 | Search, read, create, edit or update a Confluence page | `${CLAUDE_SKILL_DIR}/references/confluence.md` |
 | Publish a markdown file to a Confluence page | `${CLAUDE_SKILL_DIR}/references/publish.md` |
 
@@ -48,7 +48,7 @@ The scripts need `jq`, `curl`, `column` and Python 3 (standard library only).
 ## The rules
 
 1. **Check before you write.** Never invent a Jira project key, issue type or field name - read them with `jira-meta.sh`. Never invent a Confluence media id or collection.
-2. **Confirm with the user before you create.** An issue or a page is visible to the team the moment it exists, and this skill cannot delete it.
+2. **Confirm with the user before you create, comment or move an issue.** An issue, a comment or a page is visible to the team the moment it exists, and this skill cannot delete it.
 3. **Dry-run first** for `jira-issues.sh bulk` and for `publish.sh`.
 4. **A Confluence `update` or `edit` needs `--base-version`** - the version your edit started from. It refuses if the page has moved on. To change part of a page, use `edit`, which leaves the rest untouched.
 5. **Bodies are HTML+**, converted to ADF and checked locally before anything is sent. Never markdown on the wire, never storage format.

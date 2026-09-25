@@ -1,6 +1,6 @@
 {
   "name": "atlassian",
-  "description": "Jira and Confluence from your agent, over the REST API with an API token and no MCP server. Create and read Jira issues; search, read, create and update Confluence pages; publish a repository's markdown to a space. Bodies are authored as Confluence HTML+ and converted to ADF locally, so panels, status lozenges and task lists survive. No delete.",
+  "description": "Jira and Confluence from your agent, over the REST API with an API token and no MCP server. Create, read and comment on Jira issues, and move one through its workflow; search, read, create and update Confluence pages; publish a repository's markdown to a space. Bodies are authored as Confluence HTML+ and converted to ADF locally, so panels, status lozenges and task lists survive. No delete.",
   "author": {
     "name": "DBHQ",
     "email": "dan@dbhq.uk"
