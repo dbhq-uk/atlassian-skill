@@ -615,6 +615,58 @@ class TestPublish(_Harness):
         self.assertEqual(final["version"], {"number": 2, "message": self.published()})
         self.assertIn("f-new", final["body"]["value"])
 
+    def test_a_first_publish_creates_the_page_and_writes_the_id_back(self):
+        self.doc.write_text('---\ntitle: Kept\nconfluence:\n  space: "98765"\n'
+                            '  parent: "7654321"\n---\n\n# Title\n\nBody text.\n')
+        result = self.publish()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([r["method"] for r in self.requests()], ["POST"])
+        post = self.requests("POST")[0]
+        self.assertTrue(post["url"].endswith("/wiki/api/v2/pages"), post["url"])
+        payload = json.loads(post["body"])
+        self.assertEqual(payload["spaceId"], "98765")
+        self.assertEqual(payload["parentId"], "7654321")
+        self.assertEqual(payload["title"], "Title")
+        body = json.loads(payload["body"]["value"])
+        self.assertEqual(body["content"][0]["type"], "panel")
+        self.assertIn("Body text.", payload["body"]["value"])
+        text = self.doc.read_text()
+        self.assertIn('page_id: "1234567"', text)
+        self.assertIn("title: Kept", text)
+        self.assertIn('space: "98765"', text)
+        self.assertTrue(text.endswith("# Title\n\nBody text.\n"), text)
+        self.assertIn("Wrote page_id 1234567", result.stdout)
+        self.assertIn("commit that change", result.stdout)
+
+    def test_the_next_publish_updates_the_page_it_created(self):
+        self.write_doc()
+        self.assertEqual(self.publish().returncode, 0)
+        created = json.loads(json.loads(self.requests("POST")[0]["body"])["body"]["value"])
+        # A create leaves version 1 with no message, which counts as a
+        # publish's own.
+        self.page(created, version=1, message="")
+        self.log.unlink()
+        result = self.publish()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.requests("POST"), [])
+        self.assertIn("Unchanged: page 1234567", result.stdout)
+
+    def test_a_create_whose_id_cannot_be_written_back_says_what_to_add(self):
+        folder = self.tmp / "readonly"
+        folder.mkdir()
+        self.doc = folder / "doc.md"
+        self.write_doc()
+        folder.chmod(0o555)
+        try:
+            result = self.publish()
+        finally:
+            folder.chmod(0o755)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(len(self.requests("POST")), 1)
+        self.assertIn("page 1234567 was created but its id could not be written", result.stderr)
+        self.assertIn('page_id: "1234567"', result.stderr)
+        self.assertNotIn("page_id", self.doc.read_text())
+
     def test_a_missing_image_is_refused_before_anything_is_sent(self):
         self.write_doc(page_id="1234567", body="# Title\n\n![Gone](nowhere.png)\n")
         result = self.publish()
