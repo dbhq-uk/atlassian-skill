@@ -99,8 +99,7 @@ must degrade the same way, to an opaque blob, rather than silently narrowing
 the page.
 
 **6. A write that cannot be round-tripped is refused, not attempted, and
-there is no `--force`.** Before `confluence-pages.sh update` (and
-`publish.sh`, which calls it) sends anything, it
+there is no `--force`.** Before `confluence-pages.sh update` sends anything, it
 converts the page's current live content back through the converter and
 checks the result matches (Python value equality on the ADF, not a byte- or
 string-identical comparison - `1800.0 == 1800` is equal, and correctly so).
@@ -123,7 +122,12 @@ route around: there is no `--force` anywhere in this skill, on
 either script. `confluence-pages.sh edit` narrows the gate rather than
 bypassing it: it converts only the fragment and splices it in by local id,
 so the rest of the page never goes through the converter and only the
-block being replaced has to survive the round trip.
+block being replaced has to survive the round trip. `publish.sh` does not
+run the gate: it replaces the page with the file by design, so its guard is
+different - it refuses when the page's latest version is not its own
+`Published from <file>`, which means somebody edited the page in Confluence,
+until that edit is in the file and `--base-version` confirms that exact
+version.
 
 **7. No packages, no venv, no credential in the repo.** Bash plus `curl` and
 `jq`; Python 3 standard library only. Nothing is installed at runtime.

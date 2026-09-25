@@ -18,17 +18,30 @@ PAGES = SKILL / "scripts" / "confluence-pages.sh"
 FAKE_CURL = r'''#!/usr/bin/env python3
 import json, os, re, sys
 args = sys.argv[1:]
-conf = {}
+conf, forms = {}, []
 for line in open(args[args.index("-K") + 1], encoding="utf-8"):
     m = re.match(r'^(\S+) = "(.*)"$', line.strip())
     if m:
         conf.setdefault(m.group(1), m.group(2))
-open(conf["dump-header"], "w").close()
+        if m.group(1) == "form":
+            forms.append(m.group(2))
+if "dump-header" in conf:
+    open(conf["dump-header"], "w").close()
 body = sys.stdin.read() if "data-binary" in conf else ""
-method = conf.get("request", "GET")
+method, url = conf.get("request", "GET"), conf["url"]
 with open(os.environ["FAKE_LOG"], "a", encoding="utf-8") as log:
-    log.write(json.dumps({"method": method, "url": conf["url"], "body": body}) + "\n")
-if method == "GET":
+    log.write(json.dumps({"method": method, "url": url, "body": body, "forms": forms}) + "\n")
+if "/attachments?" in url:
+    sys.stdout.write(os.environ.get("FAKE_ATTACHMENTS", '{"results":[]}') + "\n200")
+elif "/child/attachment" in url:
+    sys.stdout.write(os.environ.get(
+        "FAKE_UPLOAD",
+        '{"results":[{"extensions":{"fileId":"f-new","collectionName":"contentId-1234567"}}]}')
+        + "\n200")
+elif method == "POST":
+    sys.stdout.write('{"id":"1234567","_links":{"base":"https://example.atlassian.net/wiki",'
+                     '"webui":"/spaces/D/pages/1234567"}}\n200')
+elif method == "GET":
     sys.stdout.write(open(os.environ["FAKE_PAGE"], encoding="utf-8").read() + "\n200")
 else:
     sys.stdout.write(os.environ.get("FAKE_PUT_BODY", '{"id":"1234567"}') + "\n"
@@ -83,10 +96,11 @@ class _Harness(unittest.TestCase):
                     "FAKE_LOG": str(self.log), "FAKE_PAGE": str(self.tmp / "page.json")}
         self.page(PAGE_ADF)
 
-    def page(self, adf, version=5):
+    def page(self, adf, version=5, message="", author="acc-1", when="2026-09-20T10:00:00Z"):
         (self.tmp / "page.json").write_text(json.dumps({
             "id": "1234567", "title": "Test Page", "status": "current",
-            "version": {"number": version},
+            "version": {"number": version, "message": message,
+                        "authorId": author, "createdAt": when},
             "body": {"atlas_doc_format": {"value": _compact(adf)}}}))
 
     def body(self, html):
@@ -292,6 +306,147 @@ class TestUpdate(_Harness):
         self.assertNotIn("paragraph p1", result.stdout)
         self.assertIn("Nothing was sent.", result.stdout)
 
+
+
+class TestPublish(_Harness):
+    """publish.sh against the same fake: it refuses to overwrite an edit made
+    in Confluence, skips a write that changes nothing, and uploads a local
+    image itself."""
+
+    PUBLISH = SKILL / "scripts" / "publish.sh"
+
+    def setUp(self):
+        super().setUp()
+        self.doc = self.tmp / "doc.md"
+        self.write_doc(page_id="1234567")
+
+    def write_doc(self, page_id=None, body="# Title\n\nBody text.\n"):
+        binding = f'  page_id: "{page_id}"\n' if page_id else ""
+        self.doc.write_text(f'---\nconfluence:\n  space: "98765"\n{binding}---\n\n{body}')
+
+    def publish(self, *args, **env):
+        return subprocess.run(["bash", str(self.PUBLISH), str(self.doc), *args],
+                              capture_output=True, text=True, env={**self.env, **env})
+
+    def published(self):
+        return f"Published from {self.doc}"
+
+    def test_a_page_edited_in_confluence_is_refused_naming_that_version(self):
+        self.page(PAGE_ADF, version=7, message="", author="acc-123",
+                  when="2026-09-20T10:00:00Z")
+        result = self.publish()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("edited in Confluence", result.stderr)
+        for part in ("version 7", "acc-123", "2026-09-20T10:00:00Z", "--base-version 7"):
+            self.assertIn(part, result.stderr)
+        self.assertEqual(self.requests("PUT"), [])
+
+    def test_base_version_confirms_that_edit_and_the_publish_goes_ahead(self):
+        self.page(PAGE_ADF, version=7, message="Fixed a typo")
+        result = self.publish("--base-version", "7")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = self.put_payload()
+        self.assertEqual(payload["version"], {"number": 8, "message": self.published()})
+
+    def test_a_base_version_the_page_has_moved_past_is_refused(self):
+        self.page(PAGE_ADF, version=8, message="Another edit")
+        result = self.publish("--base-version", "7")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("moved on since version 7", result.stderr)
+        self.assertEqual(self.requests("PUT"), [])
+
+    def test_a_page_last_written_by_publish_is_updated(self):
+        self.page(PAGE_ADF, version=5, message=self.published())
+        result = self.publish()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.put_payload()["version"]["number"], 6)
+
+    def test_publishing_an_unchanged_file_sends_no_put(self):
+        self.page(PAGE_ADF, version=5, message=self.published())
+        self.assertEqual(self.publish().returncode, 0)
+        written = json.loads(self.put_payload()["body"]["value"])
+        # Confluence assigns local ids on save; they must not count as a change.
+        for node in written["content"]:
+            node.setdefault("attrs", {})["localId"] = "assigned"
+        self.page(written, version=6, message=self.published())
+        self.log.unlink()
+        result = self.publish()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Unchanged", result.stdout)
+        self.assertEqual(self.requests("PUT"), [])
+
+    def test_a_changed_file_is_still_written(self):
+        self.page(PAGE_ADF, version=5, message=self.published())
+        self.publish()
+        written = json.loads(self.put_payload()["body"]["value"])
+        self.page(written, version=6, message=self.published())
+        self.log.unlink()
+        self.write_doc(page_id="1234567", body="# Title\n\nNew body text.\n")
+        self.assertEqual(self.publish().returncode, 0)
+        self.assertEqual(len(self.requests("PUT")), 1)
+
+    def _with_image(self):
+        (self.tmp / "img").mkdir()
+        (self.tmp / "img" / "d.png").write_bytes(b"not really a png")
+        self.write_doc(page_id="1234567",
+                       body="# Title\n\n![Diagram](img/d.png)\n")
+        self.page(PAGE_ADF, version=5, message=self.published())
+
+    def test_a_local_image_is_uploaded_and_the_figure_points_at_it(self):
+        import hashlib
+        self._with_image()
+        result = self.publish()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        uploads = [r for r in self.requests("PUT") if "/child/attachment" in r["url"]]
+        self.assertEqual(len(uploads), 1)
+        digest = hashlib.sha256(b"not really a png").hexdigest()
+        self.assertIn(f"comment=sha256:{digest}", uploads[0]["forms"])
+        page_puts = [r for r in self.requests("PUT") if "/wiki/api/v2/pages/" in r["url"]]
+        media = json.loads(json.loads(page_puts[0]["body"])["body"]["value"])
+        figure = media["content"][-1]
+        self.assertEqual(figure["type"], "mediaSingle")
+        self.assertEqual(figure["content"][0]["attrs"],
+                         {"type": "file", "id": "f-new",
+                          "collection": "contentId-1234567", "alt": "Diagram"})
+
+    def test_an_image_already_attached_unchanged_is_not_uploaded_again(self):
+        import hashlib
+        self._with_image()
+        digest = hashlib.sha256(b"not really a png").hexdigest()
+        attached = json.dumps({"results": [{"fileId": "f-old", "comment": f"sha256:{digest}"}]})
+        result = self.publish(FAKE_ATTACHMENTS=attached)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([r for r in self.requests("PUT") if "/child/attachment" in r["url"]], [])
+        page_put = [r for r in self.requests("PUT") if "/wiki/api/v2/pages/" in r["url"]][0]
+        self.assertIn("f-old", page_put["body"])
+
+    def test_a_first_publish_with_an_image_creates_then_attaches_then_writes(self):
+        (self.tmp / "d.png").write_bytes(b"png")
+        self.write_doc(body="# Title\n\n![Diagram](d.png)\n")
+        self.page(PAGE_ADF, version=1, message="")
+        result = self.publish()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        methods = [(r["method"], "attachment" in r["url"]) for r in self.requests()
+                   if r["method"] != "GET"]
+        self.assertEqual(methods, [("POST", False), ("PUT", True), ("PUT", False)])
+        self.assertIn('page_id: "1234567"', self.doc.read_text())
+        final = json.loads(self.requests("PUT")[-1]["body"])
+        self.assertEqual(final["version"], {"number": 2, "message": self.published()})
+        self.assertIn("f-new", final["body"]["value"])
+
+    def test_a_missing_image_is_refused_before_anything_is_sent(self):
+        self.write_doc(page_id="1234567", body="# Title\n\n![Gone](nowhere.png)\n")
+        result = self.publish()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("nowhere.png", result.stderr)
+        self.assertEqual(self.requests(), [])
+
+    def test_the_publish_path_never_sends_the_user_to_the_confluence_ui(self):
+        # Publish replaces the page by design. The old advice - resolve the
+        # round-trip gate "in the Confluence UI" - asked a person to delete
+        # content so that publish could overwrite it anyway.
+        self.assertNotIn("Confluence UI", self.PUBLISH.read_text())
+        self.assertNotIn("check-roundtrip", self.PUBLISH.read_text())
 
 if __name__ == "__main__":
     unittest.main()

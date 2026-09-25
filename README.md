@@ -153,9 +153,12 @@ code block and real checkboxes, rather than a wall of plain text.
 
 ## A known limit: the round-trip gate
 
-`confluence-pages.sh update` and `publish.sh` both refuse to overwrite a page
-whose current content this converter cannot read back unchanged - value
-equality on the parsed ADF, not a byte-identical comparison.
+`confluence-pages.sh update` refuses to overwrite a page whose current
+content this converter cannot read back unchanged - value equality on the
+parsed ADF, not a byte-identical comparison. `edit` only checks the block it
+replaces, and `publish.sh` does not run the gate at all: it replaces the page
+with the file by design, and checks instead that nobody edited the page in
+Confluence since the last publish.
 
 `UPDATE REPLACES THE WHOLE BODY`, so writing over content like that would
 silently drop whatever does not survive the round trip, not only the part you
@@ -195,10 +198,9 @@ Two things soften this rather than hide it:
   refused 35 of 40 real pages sampled from a live site; a *known* type that
   would otherwise drop an attribute it cannot represent degrades the same
   way, to an opaque blob, rather than silently narrowing the page.
-- **`publish.sh --dry-run` previews the gate** against the live page
-  before you run for real, so a refusal is not a surprise on the write - the
-  page can still change in between, so treat the preview as "likely", not
-  certain.
+- **`edit` narrows the gate to one block.** It converts only your fragment
+  and splices it into the live page by local id, so the rest of the page -
+  whatever it holds - never goes through the converter.
 
 ## Use
 
@@ -324,11 +326,21 @@ start number), GFM task lists (`- [ ]`, which become real Confluence task
 lists), tables, blockquotes, fenced code blocks with ```` ``` ```` or `~~~`,
 thematic breaks, links and `<https://...>` autolinks, bold, italic,
 strikethrough and inline code in either the `*` or `_` form, backslash
-escapes, and an image at an absolute URL on a line of its own.
+escapes, and an image on a line of its own - at an absolute URL, or a local
+file, which publish uploads as a page attachment and reuses on later runs
+while it is unchanged.
 
-Anything else - a relative image, an image inside a sentence, a reference-style
-link or footnote, an indented code block - is refused by name rather than
-published as literal markdown.
+Anything else - an image inside a sentence, a reference-style link or
+footnote, an indented code block - is refused by name rather than published as
+literal markdown.
+
+Publish replaces the page with the file, so before it writes it checks who
+wrote last. Every publish leaves the message `Published from <file>` on its
+version. If the latest version is anything else, somebody edited the page in
+Confluence, and publish refuses, naming that version, its author and its
+date. Bring the edit into the file, then publish with `--base-version` set to
+that version to confirm it. A publish that would change nothing sends
+nothing, so re-running an unchanged file adds no empty versions.
 
 A panel, a status lozenge, a decision list, a layout and a column width have
 no markdown syntax at all - write them as raw HTML+ on its own line, which
@@ -375,7 +387,8 @@ all (`` ```c++ ``), not restricted to a plain word.
 | `skills/atlassian/scripts/confluence-search.sh` | Spaces, CQL and free-text search |
 | `skills/atlassian/scripts/confluence-pages.sh` | Read, create, edit, update - the stale-write and round-trip guards |
 | `skills/atlassian/scripts/adf_edit.py` | Splices a fragment into a page by local id, and says what a write would remove |
-| `skills/atlassian/scripts/publish.sh` | The dry-run/create/update run, and the write-back of `page_id` |
+| `skills/atlassian/scripts/publish.sh` | The dry-run/create/update run, the last-edit check, image upload, and the write-back of `page_id` |
+| `skills/atlassian/scripts/_confluence.sh` | Reading and writing one page, shared by `confluence-pages.sh` and `publish.sh` |
 | `skills/atlassian/scripts/md_to_htmlplus.py` | Markdown to HTML+, with raw HTML+ passed through |
 | `skills/atlassian/scripts/frontmatter.py` | Reads and writes the YAML binding, without `eval` |
 | `skills/atlassian/scripts/attachments.sh` | Multipart attachment upload - the token stays off the command line here too |

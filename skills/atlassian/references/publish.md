@@ -30,25 +30,29 @@ ${CLAUDE_SKILL_DIR}/scripts/publish.sh docs/payment-correlation.md --dry-run
 ${CLAUDE_SKILL_DIR}/scripts/publish.sh docs/payment-correlation.md
 ```
 
-**Always dry-run first.** It converts the whole body and reports what would happen. A `--dry-run` against a file with no `page_id` yet is pure local conversion and needs no credentials at all. A `--dry-run` against a file that already carries a `page_id` also makes one read-only call to the live page, to preview the round-trip gate below before you run for real - see [§ Updating an existing page](#updating-an-existing-page). Neither ever writes.
+**Always dry-run first.** It converts the whole body and reports what would happen. A `--dry-run` against a file with no `page_id` yet is pure local conversion and needs no credentials at all. A `--dry-run` against a file that already carries a `page_id` also makes one read-only call to the live page, to say whether it was edited in Confluence since the last publish, and whether the file changes it - see [§ Updating an existing page](#updating-an-existing-page). Neither ever writes.
 
 The page title is the file's first `# ` heading, or the filename if there is none.
 
 ## Updating an existing page
 
-`publish.sh` updates through `confluence-pages.sh update`, which carries two protections you do not have to think about but should know are there, because both can stop a publish with nothing sent.
+**Publish replaces the page body with the file.** That is the design - the file is the master - so what publish guards against is not the converter, but a person having edited the page in Confluence since the last publish. Their edit would be lost.
 
-**`update` always needs `--base-version <n>` - `publish.sh` supplies it for you, read fresh immediately before the write.** The file is the master, so there is normally nothing to "base" an edit on the way a human splicing a change into a fetched copy would - but the guard still catches a real case: someone editing the live page directly at the exact moment `publish.sh` runs. If that happens, `update` refuses rather than silently discarding their in-flight change, and reports it as the page having moved on since the version `publish.sh` just read. **The fix is simply to run `publish.sh` again** - there is nothing to splice, because the file on disk already is the whole intended content, unlike the human workflow `confluence.md` documents.
-
-**`update` also runs a round-trip gate.** It refuses to overwrite a page whose current content this converter cannot read back unchanged. A live-site measurement once found this on roughly half of real pages - almost always an ordinary node's own attribute or mark (a local id, a colspanned cell's per-column widths, a list's start number) that this converter dropped rather than carried through, not an exotic node type. Generalising the carry-through-or-opaque-passthrough rule that already covered media to every named node type closed that gap, and the same measurement now passes cleanly; what still refuses is narrower - a node type or attribute this converter has never modelled at all, or a table a person left genuinely inconsistent. `UPDATE REPLACES THE WHOLE BODY`, so writing over content like that would silently drop whatever this converter cannot carry through, not just the part `publish.sh` meant to change. This is expected, ordinary behaviour on a page with any editing history outside this pipeline, not a sign anything is broken:
+Every publish writes its version with the message `Published from <file>`, so the page's latest version says who wrote last. Before it writes, `publish.sh` reads the live page. If the latest version is anything else, it refuses, naming that version, its author and its date:
 
 ```
-Publish stopped: docs/payment-correlation.md was not sent to page 8901234. Nothing changed. See the error above.
-If the page moved on since this run started, just run publish.sh again - the file is the master, so there is nothing to splice by hand.
-If the converter refused the round trip, there is no --force: resolve it directly in the Confluence UI, then re-run.
+Error: page 8901234 was edited in Confluence since docs/payment-correlation.md was last published.
+Cause: version 9, by 5b10ac8d82e05b22cc7d4ef5 on 2026-09-20T10:00:00Z, has the message "", not "Published from docs/payment-correlation.md". Publishing would overwrite it.
+Fix: nothing was sent. Read the page (confluence-pages.sh read 8901234 --format markdown), bring that edit into docs/payment-correlation.md, then publish with --base-version 9 to confirm you have.
 ```
 
-**There is no `--force` anywhere in this skill, and `publish.sh` adds none.** A round-trip refusal needs a human decision in the Confluence UI, not a flag. Run `--dry-run` first and it previews this exact check against the page as it stands right now, so the refusal is not a surprise on the real run - though the page can still change between the preview and the write, so treat the preview as "likely", not certain.
+Do exactly that. Read the page, bring the edit into the file (or decide it should go), then run again with `--base-version` set to that version. `--base-version` is not a `--force`: it confirms one exact version, and if another edit lands after it, publish refuses again. A version 1 with no message is what a create leaves, and counts as publish's own.
+
+**A publish that changes nothing sends nothing.** The page's current body is compared with what the file would write, ignoring what Confluence fills in on save - local ids, and the measured size of an image. If they match, publish says `Unchanged` and writes no new version, so re-running an unchanged file does not fill the page history.
+
+If someone saves the page in the moment between publish reading it and writing, the write is refused as a conflict and nothing changes. Run `publish.sh` again.
+
+**There is no `--force` anywhere in this skill, and `publish.sh` adds none.** Run `--dry-run` first: against a file that carries a `page_id`, it reads the live page and says whether the publish would be refused, and whether the file changes the page at all.
 
 ## What markdown can and cannot express
 
@@ -64,9 +68,9 @@ These convert:
 - A thematic break (`---`, `***` or `___` on a line of its own)
 - Links, `<https://...>` autolinks and `<name@example.com>`
 - `**bold**`, `__bold__`, `*italic*`, `_italic_`, `~~strike~~` and `` `code` ``, with backslash escapes (`\*`)
-- An image at an absolute URL, `![alt](https://...)`, on a line of its own
+- An image, on a line of its own: at an absolute URL, or a local file, which publish uploads - see [§ Images](#images)
 
-Everything else is refused by name rather than published as literal markdown: a relative image, an image inside a sentence, a nested list, a reference-style link or footnote, and an indented code block. A heading or a nested quote inside a blockquote is refused by the HTML+ converter, which knows what a blockquote may hold.
+Everything else is refused by name rather than published as literal markdown: an image inside a sentence, a nested list, a reference-style link or footnote, and an indented code block. A heading or a nested quote inside a blockquote is refused by the HTML+ converter, which knows what a blockquote may hold.
 
 A panel, a status lozenge, a decision list, a layout and a column width have **no markdown syntax at all**. Write them as raw HTML+ on its own line in the source file, which markdown permits and this skill passes through untouched:
 
@@ -103,7 +107,13 @@ Nothing was sent - this fires while converting, before the dry-run report or the
 
 An image at an absolute URL, `![alt](https://example.com/diagram.png)` on a line of its own, becomes a figure showing that image. Confluence fetches it from that address, so it must stay reachable.
 
-A local image must be a page attachment before it can appear on the page - conversion does not upload files, and a local path will not resolve, so `![alt](diagrams/context.png)` is refused. `publish.sh` does not do this step for you; upload separately and reference the result in the source file.
+**A local image, `![alt](diagrams/context.png)` on a line of its own, is uploaded by `publish.sh` as a page attachment**, and the figure points at it. The path is read relative to the folder the markdown file is in. A missing file is refused before anything is sent, and so are two different images with the same file name, because a page attachment is named by its file name.
+
+The upload carries the image's sha256 hash in its comment. On the next publish, an attachment of the same name with the same hash is reused rather than uploaded again - a re-upload would issue a new media id and make every publish look like a change. A changed image is uploaded as a new version of the same attachment.
+
+On a first publish the page does not exist yet, so there is nothing to attach to. Publish creates it with a placeholder where each image goes, uploads the images, then writes the full page as version 2.
+
+To place an image by hand instead - with a caption, or a width - upload it and write the figure yourself:
 
 ```bash
 ${CLAUDE_SKILL_DIR}/scripts/attachments.sh upload 8901234 diagrams/context.png
@@ -131,5 +141,4 @@ Every published page gets an info panel naming the source file, saying a direct 
 - **Dry-run before a first publish**, always.
 - **Commit the written-back `page_id`** or the next run creates a duplicate.
 - **Never invent an opaque id.**
-- **No `--force`.** A round-trip refusal on `update` needs a human fix in the Confluence UI - see [§ Updating an existing page](#updating-an-existing-page).
-- **`--base-version` is handled for you** - `publish.sh` reads it fresh immediately before every update; you never pass it yourself.
+- **No `--force`.** A page edited in Confluence since the last publish is refused until that edit is in the file and `--base-version` confirms it - see [§ Updating an existing page](#updating-an-existing-page).

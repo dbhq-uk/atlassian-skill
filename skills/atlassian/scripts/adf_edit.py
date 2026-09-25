@@ -14,6 +14,9 @@ HTML+ for leaves exactly as it arrived.
 names what would go: every node whose local id is missing afterwards, and
 every node the converter has no named form for that no longer appears.
 
+`same` says whether a page already holds what publish.sh would write, so an
+unchanged file does not add an empty version to the page history.
+
 Standard library only. Reads files, writes JSON to stdout, sends nothing.
 """
 
@@ -179,6 +182,31 @@ def describe(before, after):
     return "\n".join(lines)
 
 
+# Attributes Confluence fills in when it saves a page, which a file never
+# states. A local id on any node; the pixel size of an image it measured.
+_ASSIGNED_ON_SAVE = {"localId"}
+_ASSIGNED_ON_SAVE_BY_TYPE = {"media": {"width", "height"},
+                             "mediaSingle": {"width", "widthType"}}
+
+
+def same(new, live):
+    """Whether live already holds new, ignoring what Confluence assigns on
+    save and new never states. Anything else that differs counts."""
+    if isinstance(new, dict) and isinstance(live, dict) and isinstance(new.get("type"), str):
+        if set(new) - {"attrs"} != set(live) - {"attrs"}:
+            return False
+        ignorable = _ASSIGNED_ON_SAVE | _ASSIGNED_ON_SAVE_BY_TYPE.get(new["type"], set())
+        new_attrs, live_attrs = new.get("attrs") or {}, live.get("attrs") or {}
+        if any(k not in live_attrs or live_attrs[k] != v for k, v in new_attrs.items()):
+            return False
+        if any(k not in new_attrs and k not in ignorable for k in live_attrs):
+            return False
+        return all(same(new[k], live[k]) for k in new if k != "attrs")
+    if isinstance(new, list) and isinstance(live, list):
+        return len(new) == len(live) and all(same(a, b) for a, b in zip(new, live))
+    return new == live
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -190,6 +218,9 @@ def main(argv=None):
     d = sub.add_parser("diff", help="say what writing the second ADF over the first removes")
     d.add_argument("before")
     d.add_argument("after")
+    m = sub.add_parser("same", help="exit 0 if the live ADF already holds the new one")
+    m.add_argument("new")
+    m.add_argument("live")
     args = parser.parse_args(argv)
     try:
         if args.command == "splice":
@@ -202,6 +233,12 @@ def main(argv=None):
                 fragment = f.read()
             json.dump(splice(doc, args.op, args.local_id, fragment), sys.stdout,
                       ensure_ascii=False, separators=(",", ":"))
+        elif args.command == "same":
+            with open(args.new, encoding="utf-8") as f:
+                new = json.load(f)
+            with open(args.live, encoding="utf-8") as f:
+                live = json.load(f)
+            return 0 if same(new, live) else 3
         else:
             with open(args.before, encoding="utf-8") as f:
                 before = json.load(f)
