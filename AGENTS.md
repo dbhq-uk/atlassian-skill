@@ -5,8 +5,9 @@ Guidance for AI agents (and people) working in this repository.
 ## What this is
 
 **atlassian** - one agent skill that talks to an Atlassian Cloud site over
-its REST API, on one credential and with no MCP server. It creates and reads
-Jira issues, searches, reads, creates and updates Confluence pages, and
+its REST API, on one credential and with no MCP server. It creates, reads and
+comments on Jira issues and moves one issue at a time through its workflow,
+searches, reads, creates and updates Confluence pages, and
 publishes a repository's markdown file to a page. It follows the
 [Agent Skills](https://agentskills.io) layout (`skills/<name>/SKILL.md`) and
 ships as a [Claude Code plugin](https://code.claude.com/docs/en/plugins).

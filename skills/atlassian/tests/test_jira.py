@@ -317,6 +317,152 @@ class TestBulk(_Harness):
         self.assertEqual(self.requests(), [])
 
 
+class TestComment(_Harness):
+    def setUp(self):
+        super().setUp()
+        self.routes([{"method": "POST", "match": "/rest/api/3/issue/PAY-12/comment",
+                      "status": 201, "body": json.dumps({"id": "10042"})}])
+
+    def posted(self):
+        posts = self.requests("POST")
+        self.assertEqual(len(posts), 1, posts)
+        return json.loads(posts[0]["body"])
+
+    def test_a_text_comment_is_posted_as_adf(self):
+        result = self.run_issues("comment", "PAY-12", "First line.\n\nSecond paragraph.")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        body = self.posted()["body"]
+        self.assertEqual(body["type"], "doc")
+        self.assertEqual([n["content"][0]["text"] for n in body["content"]],
+                         ["First line.", "Second paragraph."])
+        self.assertIn("browse/PAY-12?focusedCommentId=10042", result.stdout)
+
+    def test_a_body_file_goes_through_the_jira_profile(self):
+        good = self.tmp / "c.html"
+        good.write_text('<div data-type="panel-info"><p>Deployed.</p></div>')
+        result = self.run_issues("comment", "PAY-12", "--body-file", str(good))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.posted()["body"]["content"][0]["type"], "panel")
+        self.log.unlink()
+        bad = self.tmp / "bad.html"
+        bad.write_text('<ul data-type="decision-list"><li data-type="decision-item" '
+                       'data-state="DECIDED">Ship it</li></ul>')
+        result = self.run_issues("comment", "PAY-12", "--body-file", str(bad))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("decisionList", result.stderr)
+        self.assertEqual(self.requests(), [])
+
+    def test_dry_run_sends_nothing(self):
+        result = self.run_issues("comment", "PAY-12", "Looks good.", "--dry-run")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Nothing was sent.", result.stdout)
+        self.assertEqual(self.requests(), [])
+
+    def test_an_empty_comment_or_a_bad_key_is_refused_before_a_request(self):
+        for args in (("comment", "PAY-12"), ("comment", "PAY-12", "   "),
+                     ("comment", "PAY-12/../../x", "hi"), ("comment", "pay", "hi")):
+            with self.subTest(args=args):
+                result = self.run_issues(*args)
+                self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.requests(), [])
+
+
+TRANSITIONS = {"transitions": [
+    {"id": "21", "name": "Start work", "to": {"name": "In Progress"}, "fields": {}},
+    {"id": "31", "name": "Done", "to": {"name": "Done"}, "fields": {}},
+    {"id": "41", "name": "Close with resolution", "to": {"name": "Closed"}, "fields": {
+        "resolution": {"required": True, "hasDefaultValue": False, "name": "Resolution"}}},
+    {"id": "51", "name": "Reopen", "to": {"name": "To Do"}, "fields": {}},
+    {"id": "52", "name": "Back to backlog", "to": {"name": "To Do"}, "fields": {}},
+]}
+
+
+class TestTransition(_Harness):
+    def setUp(self):
+        super().setUp()
+        self.routes([
+            {"method": "GET", "match": "/rest/api/3/issue/PAY-12?fields=status",
+             "body": json.dumps({"key": "PAY-12", "fields": {"status": {"name": "To Do"}}})},
+            {"method": "GET", "match": "/rest/api/3/issue/PAY-12/transitions",
+             "body": json.dumps(TRANSITIONS)},
+            {"method": "POST", "match": "/rest/api/3/issue/PAY-12/transitions",
+             "status": 204, "body": ""},
+        ])
+
+    def test_it_reads_the_valid_targets_before_it_sends(self):
+        result = self.run_issues("transition", "PAY-12", "In Progress")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = [(r["method"], r["url"].split("/rest/api/3/")[1]) for r in self.requests()]
+        self.assertEqual(calls, [
+            ("GET", "issue/PAY-12?fields=status"),
+            ("GET", "issue/PAY-12/transitions?expand=transitions.fields"),
+            ("POST", "issue/PAY-12/transitions")])
+        self.assertEqual(json.loads(self.requests("POST")[0]["body"]),
+                         {"transition": {"id": "21"}})
+        self.assertIn('Moved PAY-12 from "To Do" to "In Progress"', result.stdout)
+        self.assertIn('jira-issues.sh transition PAY-12 "To Do"', result.stdout)
+
+    def test_a_target_matches_by_name_status_or_id_in_any_case(self):
+        for target, expected in (("start work", "21"), ("DONE", "31"), ("31", "31")):
+            with self.subTest(target=target):
+                if self.log.exists():
+                    self.log.unlink()
+                result = self.run_issues("transition", "PAY-12", target)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(self.requests("POST")[0]["body"]),
+                                 {"transition": {"id": expected}})
+
+    def test_a_target_the_workflow_does_not_offer_is_refused_naming_the_ones_it_does(self):
+        result = self.run_issues("transition", "PAY-12", "Released")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('cannot move to "Released" from "To Do"', result.stderr)
+        self.assertIn("Start work (id 21, to In Progress)", result.stderr)
+        self.assertEqual(self.requests("POST"), [])
+
+    def test_an_ambiguous_target_is_refused_until_an_id_is_given(self):
+        result = self.run_issues("transition", "PAY-12", "To Do")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("matches more than one transition", result.stderr)
+        self.assertIn("id 51", result.stderr)
+        self.assertIn("id 52", result.stderr)
+        self.assertEqual(self.requests("POST"), [])
+
+    def test_a_transition_with_a_required_field_is_left_to_the_ui(self):
+        result = self.run_issues("transition", "PAY-12", "Closed")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("needs fields this command does not set: Resolution", result.stderr)
+        self.assertEqual(self.requests("POST"), [])
+
+    def test_dry_run_reads_but_sends_nothing(self):
+        result = self.run_issues("transition", "PAY-12", "Done", "--dry-run")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('would move from "To Do" to "Done"', result.stdout)
+        self.assertEqual(self.requests("POST"), [])
+
+    def test_there_is_no_bulk_transition(self):
+        for args in (("transition", "PAY-12", "Done", "PAY-13"),
+                     ("transition", "PAY-12,PAY-13", "Done"),
+                     ("transition", "project = PAY", "Done")):
+            with self.subTest(args=args):
+                result = self.run_issues(*args)
+                self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.requests(), [])
+
+    def test_security_lists_the_scopes_a_transition_needs(self):
+        # Atlassian's API reference gives the transitions endpoints these two
+        # granular scopes beyond the ones create already needs. A scoped
+        # token without them cannot move an issue.
+        security = " ".join((SKILL.parents[1] / "SECURITY.md").read_text().split())
+        for scope in ("read:issue.transition:jira", "write:issue.property:jira"):
+            self.assertIn(scope, security)
+
+    def test_transitions_lists_the_moves_on_offer(self):
+        result = self.run_issues("transitions", "PAY-12")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertRegex(result.stdout, r"21\s+Start work\s+In Progress")
+        self.assertEqual({r["method"] for r in self.requests()}, {"GET"})
+
+
 class TestNoUnsourcedRequestRate(unittest.TestCase):
     """"Roughly 60 requests a minute" was stated in four places with no
     source. Atlassian publishes per-second burst limits and an hourly

@@ -103,12 +103,14 @@ required" of every endpoint it calls (read 25 September 2026):
   `read:issue-details:jira`, `read:issue-meta:jira`,
   `read:issue-security-level:jira`, `read:issue-type:jira`,
   `read:issue-type-hierarchy:jira`, `read:issue.changelog:jira`,
-  `read:issue.vote:jira`, `read:priority:jira`, `read:project:jira`,
+  `read:issue.transition:jira`, `read:issue.vote:jira`, `read:priority:jira`,
+  `read:project:jira`,
   `read:project-category:jira`, `read:project-role:jira`,
   `read:project-version:jira`, `read:project.component:jira`,
   `read:project.property:jira`, `read:status:jira`, `read:user:jira`,
   `write:attachment:jira`, `write:comment:jira`,
-  `write:comment.property:jira` and `write:issue:jira`.
+  `write:comment.property:jira`, `write:issue:jira` and
+  `write:issue.property:jira`.
 - **Confluence**: `read:space:confluence`, `read:page:confluence`,
   `write:page:confluence`, `read:attachment:confluence`,
   `read:content-details:confluence` and `write:attachment:confluence`.

@@ -1,6 +1,6 @@
 # Jira issue creation and lookup
 
-Create and read Jira Cloud issues through the REST v3 API. Credentials, setup and the rules are in `SKILL.md`.
+Create, read and comment on Jira Cloud issues, and move one issue through its workflow, through the REST v3 API. Credentials, setup and the rules are in `SKILL.md`.
 
 ## Look before you create
 
@@ -104,6 +104,31 @@ ${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh mine [max]
 `search` posts to `/rest/api/3/search/jql`. The old `GET /rest/api/3/search` is deprecated and is not used here.
 
 `search` fetches one page only, up to `max` (default 25). It is not silent about that: if the response carries a `nextPageToken`, or the page is exactly full, it says more results may exist and to raise `max` or narrow the JQL, rather than let a truncated result set look complete.
+
+## Commenting
+
+```bash
+${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh comment <ISSUE-KEY> "<text>" [--dry-run]
+${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh comment <ISSUE-KEY> --body-file /tmp/comment.html [--dry-run]
+```
+
+Plain text works as it does for a description: a blank line starts a new paragraph. `--body-file` takes an HTML+ fragment and is held to Jira's node list, the same as `--description-file`. Write the comment in Simplified Technical English, and confirm it with the user first: the skill cannot delete a comment once it is posted. It prints a link to the new comment.
+
+## Moving an issue
+
+```bash
+${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh transitions <ISSUE-KEY>                 # the moves on offer now
+${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh transition <ISSUE-KEY> "<target>" --dry-run
+${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh transition <ISSUE-KEY> "<target>"
+```
+
+A workflow decides where an issue can go from where it is, so never assume a status name. `transition` reads the issue's current status and the transitions its workflow offers before it sends anything. `<target>` is the transition's name, the status it leads to, or its id, in any case. It refuses:
+
+- a target the workflow does not offer from here, naming the ones it does
+- a target that matches two transitions, until you pass the id
+- a transition whose screen needs a field, such as a resolution, which this command does not set. Make that move in the Jira UI.
+
+On success it prints the status the issue came from, and the command that moves it back if the workflow allows that. One issue per call: there is no bulk transition.
 
 ## Limits
 

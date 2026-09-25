@@ -1,6 +1,7 @@
 #!/bin/bash
-# Jira issues - create and read. There is deliberately no delete and no bulk
-# transition here: this skill cannot destroy work.
+# Jira issues - create, read, comment on, and move one issue through its
+# workflow. There is deliberately no delete and no bulk transition here: this
+# skill cannot destroy work, and a transition moves one issue at a time.
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -10,7 +11,7 @@ require_config
 
 usage() {
     cat <<'EOF'
-Jira issues (create and read only)
+Jira issues (create, read, comment and transition - never delete)
 
 Usage: jira-issues.sh <command> [args]
 
@@ -32,6 +33,18 @@ Read:
                              Show one issue and its last N comments (default 5)
   search <JQL> [max]         Search with JQL (default 25 results)
   mine [max]                 Open issues assigned to you
+  transitions <ISSUE-KEY>    The moves the issue's workflow allows from here
+
+Comment and move:
+  comment <ISSUE-KEY> <text> [--dry-run]
+  comment <ISSUE-KEY> --body-file FILE [--dry-run]
+                             Add a comment. FILE is an HTML+ fragment, held
+                             to Jira's node list like --description-file.
+  transition <ISSUE-KEY> <target> [--dry-run]
+                             Move one issue. <target> is a transition name,
+                             the status it leads to, or its id, and must be
+                             one the issue's workflow offers now. One issue
+                             per call: there is no bulk transition.
 
 Every create prints the issue key and its browse URL. --dry-run prints the
 payload and sends nothing.
@@ -105,6 +118,19 @@ create_issue() {
     local key
     key=$(printf '%s' "$response" | jq -r '.key')
     echo "$key  $SITE/browse/$key"
+}
+
+# require_issue_key <value> - a comment or a transition writes to this issue,
+# so anything that is not a key like PAY-12 is refused before a request is
+# built. It also keeps a key from carrying a second path or a query into the
+# URL.
+require_issue_key() {
+    if ! [[ "$1" =~ ^[A-Za-z][A-Za-z0-9_]*-[0-9]+$ ]]; then
+        echo "Error: '$1' is not an issue key." >&2
+        echo "Cause: an issue key is a project key, a hyphen and a number, such as PAY-12." >&2
+        echo "Fix: pass one issue key. Find it with: jira-issues.sh search '<JQL>'" >&2
+        exit 1
+    fi
 }
 
 # bulk_post <payload> - one create request for bulk. It runs in a subshell,
@@ -407,6 +433,148 @@ case "${1:-}" in
                 | htmlplus_markdown || echo "  (this comment could not be rendered - see the error above)"
             echo
         done
+        ;;
+
+    comment)
+        shift
+        KEY="${1:-}"; [ $# -gt 0 ] && shift
+        TEXT=""; BODY_FILE=""; DRY=0
+        if [ $# -gt 0 ] && [ "${1#--}" = "$1" ]; then
+            TEXT="$1"; shift
+        fi
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --body-file) [ $# -ge 2 ] || { echo "Error: --body-file needs a file." >&2; exit 1; }
+                             BODY_FILE="$2"; shift 2 ;;
+                --dry-run)   DRY=1; shift ;;
+                *) echo "Error: unknown option '$1'." >&2
+                   echo "Usage: jira-issues.sh comment <ISSUE-KEY> <text> | --body-file FILE [--dry-run]" >&2
+                   exit 1 ;;
+            esac
+        done
+        require_issue_key "$KEY"
+        if [ -n "$TEXT" ] && [ -n "$BODY_FILE" ]; then
+            echo "Error: pass the comment as text or with --body-file, not both." >&2
+            exit 1
+        fi
+        if [ -n "$BODY_FILE" ]; then
+            [ -f "$BODY_FILE" ] || { echo "Error: $BODY_FILE does not exist." >&2; exit 1; }
+            COMMENT_ADF=$(htmlplus_jira "$BODY_FILE")
+        elif [ -n "${TEXT//[[:space:]]/}" ]; then
+            COMMENT_ADF=$(text_to_adf "$TEXT")
+        else
+            echo "Error: the comment is empty." >&2
+            echo "Usage: jira-issues.sh comment <ISSUE-KEY> <text> | --body-file FILE [--dry-run]" >&2
+            exit 1
+        fi
+        if [ "$(printf '%s' "$COMMENT_ADF" | jq '.content | length')" = "0" ]; then
+            echo "Error: the comment is empty. Nothing was sent." >&2
+            exit 1
+        fi
+        PAYLOAD=$(jq -n --argjson b "$COMMENT_ADF" '{body: $b}')
+        if [ "$DRY" = "1" ]; then
+            printf '%s\n' "$PAYLOAD" | jq .
+            echo "Dry run: this comment would go on $KEY. Nothing was sent."
+            exit 0
+        fi
+        api POST "/rest/api/3/issue/$KEY/comment" "$PAYLOAD"
+        api_ok || api_fail "$API_BODY" "commenting on $KEY"
+        COMMENT_ID=$(printf '%s' "$API_BODY" | jq -r '.id // empty')
+        echo "Commented on $KEY: $SITE/browse/$KEY${COMMENT_ID:+?focusedCommentId=$COMMENT_ID}"
+        ;;
+
+    transitions)
+        KEY="${2:-}"
+        require_issue_key "$KEY"
+        api GET "/rest/api/3/issue/$KEY/transitions"
+        api_ok || api_fail "$API_BODY" "reading the transitions of $KEY"
+        if [ "$(printf '%s' "$API_BODY" | jq '.transitions | length')" = "0" ]; then
+            echo "$KEY has no transition open to you from where it is now."
+            exit 0
+        fi
+        printf '%s' "$API_BODY" | jq -r '
+            "ID\tTRANSITION\tTO STATUS",
+            (.transitions[] | "\(.id)\t\(.name)\t\(.to.name // "-")")' | column -t -s $'\t'
+        ;;
+
+    transition)
+        shift
+        KEY="${1:-}"; TARGET="${2:-}"
+        [ $# -gt 0 ] && shift
+        [ $# -gt 0 ] && shift
+        DRY=0
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --dry-run) DRY=1; shift ;;
+                *)
+                    echo "Error: unexpected argument '$1'." >&2
+                    echo "Cause: transition moves one issue to one target. There is no bulk transition." >&2
+                    echo "Usage: jira-issues.sh transition <ISSUE-KEY> <target> [--dry-run]" >&2
+                    exit 1
+                    ;;
+            esac
+        done
+        require_issue_key "$KEY"
+        if [ -z "$TARGET" ] || [ "${TARGET#--}" != "$TARGET" ]; then
+            echo "Usage: jira-issues.sh transition <ISSUE-KEY> <target> [--dry-run]" >&2
+            echo "See where it can go with: jira-issues.sh transitions $KEY" >&2
+            exit 1
+        fi
+        # Where the issue is now, so the result can say how to move it back.
+        api GET "/rest/api/3/issue/$KEY?fields=status"
+        api_ok || api_fail "$API_BODY" "reading $KEY"
+        FROM=$(printf '%s' "$API_BODY" | jq -r '.fields.status.name // "its current status"')
+        # The valid targets come from the issue's live workflow, never from a
+        # name assumed to exist. Fields are expanded so a transition that
+        # needs input this skill does not collect is refused up front.
+        api GET "/rest/api/3/issue/$KEY/transitions?expand=transitions.fields"
+        api_ok || api_fail "$API_BODY" "reading the transitions of $KEY"
+        TRANSITIONS="$API_BODY"
+        MATCHES=$(printf '%s' "$TRANSITIONS" | jq -c --arg t "$TARGET" '
+            ($t | ascii_downcase) as $want
+            | [.transitions[]
+               | select(.id == $t
+                        or ((.name // "") | ascii_downcase) == $want
+                        or ((.to.name // "") | ascii_downcase) == $want)]')
+        OFFERED=$(printf '%s' "$TRANSITIONS" | jq -r '
+            [.transitions[] | "\(.name) (id \(.id), to \(.to.name // "-"))"] | join("; ")')
+        case "$(printf '%s' "$MATCHES" | jq length)" in
+            0)
+                echo "Error: $KEY cannot move to \"$TARGET\" from \"$FROM\"." >&2
+                echo "Cause: its workflow offers ${OFFERED:-no transition} from there." >&2
+                echo "Fix: pick one of those, by name or id. Nothing was sent." >&2
+                exit 1
+                ;;
+            1) ;;
+            *)
+                echo "Error: \"$TARGET\" matches more than one transition on $KEY." >&2
+                echo "Cause: $(printf '%s' "$MATCHES" | jq -r '[.[] | "\(.name) (id \(.id), to \(.to.name // "-"))"] | join("; ")')." >&2
+                echo "Fix: pass the id of the one you mean. Nothing was sent." >&2
+                exit 1
+                ;;
+        esac
+        TRANSITION_ID=$(printf '%s' "$MATCHES" | jq -r '.[0].id')
+        TRANSITION_NAME=$(printf '%s' "$MATCHES" | jq -r '.[0].name')
+        TO=$(printf '%s' "$MATCHES" | jq -r '.[0].to.name // .[0].name')
+        REQUIRED=$(printf '%s' "$MATCHES" | jq -r '
+            .[0].fields // {} | to_entries
+            | map(select(.value.required == true and (.value.hasDefaultValue // false) == false))
+            | map(.value.name // .key) | join(", ")')
+        if [ -n "$REQUIRED" ]; then
+            echo "Error: the \"$TRANSITION_NAME\" transition on $KEY needs fields this command does not set: $REQUIRED." >&2
+            echo "Fix: make this move in the Jira UI, where its screen asks for them. Nothing was sent." >&2
+            exit 1
+        fi
+        PAYLOAD=$(jq -n --arg id "$TRANSITION_ID" '{transition: {id: $id}}')
+        if [ "$DRY" = "1" ]; then
+            printf '%s\n' "$PAYLOAD" | jq .
+            echo "Dry run: $KEY would move from \"$FROM\" to \"$TO\" (transition \"$TRANSITION_NAME\", id $TRANSITION_ID). Nothing was sent."
+            exit 0
+        fi
+        api POST "/rest/api/3/issue/$KEY/transitions" "$PAYLOAD"
+        api_ok || api_fail "$API_BODY" "moving $KEY to $TO"
+        echo "Moved $KEY from \"$FROM\" to \"$TO\": $SITE/browse/$KEY"
+        echo "To move it back, if the workflow allows: jira-issues.sh transition $KEY \"$FROM\""
         ;;
 
     search)
