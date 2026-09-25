@@ -99,13 +99,36 @@ One credential serves Jira and Confluence alike, because both on the same site
 take the same site URL, the same account email and the same API token:
 
 ```bash
-~/.claude/skills/atlassian/scripts/atlassian-setup.sh
+<skill-folder>/scripts/atlassian-setup.sh
 ```
+
+Run it in your own terminal, not through the agent: it asks for the token with
+the input hidden. The skill folder depends on how you installed it:
+
+| Install | Setup script |
+|---|---|
+| Plugin | `~/.claude/plugins/cache/dbhq/atlassian/<commit>/skills/atlassian/scripts/atlassian-setup.sh` - `<commit>` changes with every update |
+| `npx skills add` | `<skill-folder>/scripts/atlassian-setup.sh`, where `<skill-folder>` is the `atlassian` folder it installed |
+| `./install.sh` | `~/.claude/skills/atlassian/scripts/atlassian-setup.sh` |
+| `./install-codex.sh` | `~/.codex/skills/atlassian/scripts/atlassian-setup.sh` |
+
+You do not need to work it out. With no credential, every script prints the
+full path to run, and the skill tells the agent to hand you that path.
 
 It asks for three things: your site URL (`https://you.atlassian.net`), the email
 on your Atlassian account, and an API token from
 <https://id.atlassian.com/manage-profile/security/api-tokens>. The token input is
 hidden.
+
+For a script, give the site and the email as options and the token on stdin. It
+is read from stdin, never from an argument, so it stays out of `ps`:
+
+```bash
+atlassian-setup.sh --site https://you.atlassian.net --email you@example.com < token-file
+```
+
+An existing credential is replaced only with `--overwrite`, and only once the
+new one verifies.
 
 Setup verifies Jira access against `/rest/api/3/myself` **before** writing
 anything, so a wrong token costs you nothing, then checks Confluence access too -

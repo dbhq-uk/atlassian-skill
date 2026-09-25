@@ -33,13 +33,15 @@ Then work through `${CLAUDE_SKILL_DIR}/references/checklist.md` against the body
 
 ## Credentials
 
-One credential serves both products: `~/.dbhq/atlassian/config.json`, mode 600, with the site URL, the account email and an API token. If that file does not exist, setup has not run:
+One credential serves both products: `~/.dbhq/atlassian/config.json`, mode 600, with the site URL, the account email and an API token.
+
+If that file does not exist, setup has not run. **Do not run setup yourself.** It asks for the token with the input hidden, so it needs the user at a terminal, and the token must not pass through this conversation. Give the user this command, with the full path written out, and ask them to run it in their own terminal:
 
 ```bash
 ${CLAUDE_SKILL_DIR}/scripts/atlassian-setup.sh
 ```
 
-It asks for the site URL, the email and an API token from <https://id.atlassian.com/manage-profile/security/api-tokens>. The token input is hidden. It verifies Jira access before it saves anything, then checks Confluence access (a warning, not a blocker). The token never reaches a command line: `curl` reads it from a 0600 config file.
+Every script prints the same full path when it finds no credential. Setup asks for the site URL, the email and an API token from <https://id.atlassian.com/manage-profile/security/api-tokens>. It verifies Jira access before it saves anything, then checks Confluence access (a warning, not a blocker). The token never reaches a command line: `curl` reads it from a 0600 config file.
 
 The scripts need `jq`, `curl`, `column` and Python 3 (standard library only).
 
