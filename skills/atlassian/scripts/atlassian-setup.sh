@@ -29,26 +29,109 @@ if [ ! -d "$CONFIG_DIR" ]; then
     fi
 fi
 
-echo "=== Atlassian Cloud API setup ==="
-echo
-echo "One credential authenticates both Jira and Confluence on the same site."
-echo "You need three things:"
-echo "  1. Your site URL, e.g. https://mycompany.atlassian.net"
-echo "  2. The email address on your Atlassian account"
-echo "  3. An API token from https://id.atlassian.com/manage-profile/security/api-tokens"
-echo
+SETUP="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
 
-if [ -f "$CONFIG_FILE" ]; then
-    echo "Existing configuration found at $CONFIG_FILE."
-    read -r -p "Overwrite? (y/N): " OVERWRITE
-    if [ "$OVERWRITE" != "y" ] && [ "$OVERWRITE" != "Y" ]; then
-        echo "Keeping existing configuration."
-        exit 0
-    fi
+usage() {
+    cat <<EOF
+Usage:
+  $SETUP
+      Ask for the site URL, the email and the API token. Needs a terminal.
+
+  $SETUP --site <URL> --email <ADDRESS> [--overwrite] < token-file
+      The same, for a script: the token is read from stdin, never from an
+      argument. An existing credential is replaced only with --overwrite,
+      and only once the new one verifies.
+EOF
+}
+
+SITE=""
+EMAIL=""
+OVERWRITE_FLAG=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --site|--email)
+            [ $# -ge 2 ] && [ -n "$2" ] || { echo "Error: $1 needs a value." >&2; usage >&2; exit 1; }
+            if [ "$1" = "--site" ]; then SITE="$2"; else EMAIL="$2"; fi
+            shift 2 ;;
+        --overwrite) OVERWRITE_FLAG=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "Error: unknown option '$1'." >&2; usage >&2; exit 1 ;;
+    esac
+done
+
+# Two ways in. With --site and --email, the site and email come from the
+# arguments and the token from stdin, so a script can set up a machine. With
+# neither, setup asks for all three, which needs a person at a terminal.
+SCRIPTED=""
+if [ -n "$SITE" ] || [ -n "$EMAIL" ]; then
+    [ -n "$SITE" ] && [ -n "$EMAIL" ] || {
+        echo "Error: --site and --email go together. Give both, or neither to be asked." >&2
+        exit 1
+    }
+    SCRIPTED=1
 fi
 
-echo
-read -r -p "Site URL: " SITE
+# An agent that finds no credential is told to run setup, and an agent's
+# shell has no terminal. `read` then hits end of input and, under set -e,
+# the script used to exit 1 with no message at all. Say what to do instead.
+if [ -z "$SCRIPTED" ] && [ ! -t 0 ]; then
+    {
+        echo "Error: setup needs a terminal, and there is none here. Nothing was saved."
+        echo "Cause: it asks for an API token with the input hidden, so a person has to type it."
+        echo "Fix: run this in your own terminal:"
+        echo
+        echo "  $SETUP"
+        echo
+        echo "Or, from a script, give the site and email and put the token on stdin:"
+        echo
+        echo "  $SETUP --site https://mycompany.atlassian.net --email you@example.com < token-file"
+    } >&2
+    exit 1
+fi
+
+if [ -n "$SCRIPTED" ]; then
+    if [ -f "$CONFIG_FILE" ] && [ -z "$OVERWRITE_FLAG" ]; then
+        echo "Error: a credential already exists at $CONFIG_FILE. Nothing was changed." >&2
+        echo "Fix: add --overwrite to replace it. The new one is saved only if it verifies." >&2
+        exit 1
+    fi
+    if [ -t 0 ]; then
+        read -r -s -p "API token (input hidden): " TOKEN || true
+        echo
+    else
+        IFS= read -r TOKEN || true
+    fi
+else
+    echo "=== Atlassian Cloud API setup ==="
+    echo
+    echo "One credential authenticates both Jira and Confluence on the same site."
+    echo "You need three things:"
+    echo "  1. Your site URL, e.g. https://mycompany.atlassian.net"
+    echo "  2. The email address on your Atlassian account"
+    echo "  3. An API token from https://id.atlassian.com/manage-profile/security/api-tokens"
+    echo
+
+    if [ -f "$CONFIG_FILE" ] && [ -z "$OVERWRITE_FLAG" ]; then
+        echo "Existing configuration found at $CONFIG_FILE."
+        # `|| true` on every read: end of input (Ctrl-D) must reach the
+        # checks below and their messages, not end the script silently.
+        read -r -p "Overwrite? (y/N): " OVERWRITE || true
+        if [ "$OVERWRITE" != "y" ] && [ "$OVERWRITE" != "Y" ]; then
+            echo "Keeping existing configuration."
+            exit 0
+        fi
+    fi
+
+    echo
+    read -r -p "Site URL: " SITE || true
+    echo
+    read -r -p "Email: " EMAIL || true
+    echo
+    # -s so the token is not echoed to the terminal or left on screen
+    read -r -s -p "API token (input hidden): " TOKEN || true
+    echo
+fi
+
 SITE="${SITE%/}"
 case "$SITE" in
     https://*) ;;
@@ -56,16 +139,11 @@ case "$SITE" in
     "")        echo "Error: the site URL is required." >&2; exit 1 ;;
     *)         SITE="https://$SITE" ;;
 esac
-
-echo
-read -r -p "Email: " EMAIL
 [ -n "$EMAIL" ] || { echo "Error: the email is required." >&2; exit 1; }
-
-echo
-# -s so the token is not echoed to the terminal or left on screen
-read -r -s -p "API token (input hidden): " TOKEN
-echo
-[ -n "$TOKEN" ] || { echo "Error: the token is required." >&2; exit 1; }
+# A token file often ends in a newline, and a pasted one can carry a space.
+# An API token never contains whitespace, so strip all of it.
+TOKEN="${TOKEN//[[:space:]]/}"
+[ -n "$TOKEN" ] || { echo "Error: the token is required. Nothing was saved." >&2; exit 1; }
 
 # verify <path> - call SITE+path with the entered credentials.
 # Sets STATUS and BODY. The token goes in a 0600 curl config file, never on

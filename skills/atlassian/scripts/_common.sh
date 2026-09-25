@@ -37,10 +37,20 @@ atlassian_migrate_legacy_config() {
 
 atlassian_migrate_legacy_config
 
+# setup_hint - how to run setup, with the full path. Setup asks for the token
+# with the input hidden, so it needs a person at a terminal: an agent hands
+# this line to the user rather than running it.
+setup_hint() {
+    local dir
+    dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    echo "Fix: run this in your own terminal (it asks for the API token, so an agent cannot run it for you):" >&2
+    echo "  $dir/atlassian-setup.sh" >&2
+}
+
 require_config() {
     if [ ! -f "$CONFIG_FILE" ]; then
         echo "Error: no credentials. Cause: $CONFIG_FILE does not exist." >&2
-        echo "Fix: run atlassian-setup.sh" >&2
+        setup_hint
         exit 1
     fi
     SITE=$(jq -r '.site // empty' "$CONFIG_FILE")
@@ -48,7 +58,7 @@ require_config() {
     TOKEN=$(jq -r '.token // empty' "$CONFIG_FILE")
     if [ -z "$SITE" ] || [ -z "$EMAIL" ] || [ -z "$TOKEN" ]; then
         echo "Error: $CONFIG_FILE is missing site, email or token." >&2
-        echo "Fix: re-run atlassian-setup.sh" >&2
+        setup_hint
         exit 1
     fi
 }
