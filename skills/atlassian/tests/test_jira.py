@@ -10,6 +10,7 @@ a real site.
 import json
 import os
 import pathlib
+import re
 import subprocess
 import tempfile
 import unittest
@@ -35,10 +36,15 @@ used = json.load(open(state_path)) if os.path.exists(state_path) else {}
 for i, route in enumerate(routes):
     if route.get("method", "GET") != method or route["match"] not in url:
         continue
+    if "body_contains" in route and route["body_contains"] not in body:
+        continue
     if "times" in route and used.get(str(i), 0) >= route["times"]:
         continue
     used[str(i)] = used.get(str(i), 0) + 1
     json.dump(used, open(state_path, "w"))
+    if route.get("curl_exit"):
+        sys.stderr.write("curl: (7) Failed to connect\n")
+        sys.exit(route["curl_exit"])
     if "dump-header" in conf:
         with open(conf["dump-header"], "w") as h:
             for k, v in route.get("headers", {}).items():
@@ -99,6 +105,11 @@ class _Harness(unittest.TestCase):
         self.bin.mkdir()
         (self.bin / "curl").write_text(FAKE_CURL)
         (self.bin / "curl").chmod(0o755)
+        # sleep is logged, not slept, so a test can see every pause and a
+        # run with a Retry-After does not take real seconds.
+        self.sleeps = self.tmp / "sleeps.log"
+        (self.bin / "sleep").write_text(f'#!/bin/sh\necho "$1" >> "{self.sleeps}"\n')
+        (self.bin / "sleep").chmod(0o755)
         home = self.tmp / "home"
         (home / ".dbhq" / "atlassian").mkdir(parents=True)
         (home / ".dbhq" / "atlassian" / "config.json").write_text(
@@ -184,6 +195,151 @@ class TestGet(_Harness):
         result = self.run_issues("get", "PAY-12")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Description:\n  (empty)", result.stdout)
+
+
+def created(key):
+    return {"method": "POST", "match": "/rest/api/3/issue", "status": 201,
+            "body": json.dumps({"key": key})}
+
+
+class TestBulk(_Harness):
+    ENTRIES = [
+        {"summary": "First", "type": "Task"},
+        {"summary": "Second", "labels": ["a"], "note": "kept as written"},
+        {"summary": "Third"},
+    ]
+
+    def write(self, entries, name="tickets.json"):
+        path = self.tmp / name
+        path.write_text(json.dumps(entries))
+        return path
+
+    def posts(self):
+        return [json.loads(c["body"]) for c in self.requests("POST")]
+
+    def slept(self):
+        return self.sleeps.read_text().split() if self.sleeps.exists() else []
+
+    def test_a_429_is_waited_out_and_the_item_retried(self):
+        self.routes([
+            {"method": "POST", "match": "/rest/api/3/issue", "times": 1,
+             "status": 429, "headers": {"Retry-After": "3"}, "body": "{}"},
+            created("PAY-1"),
+        ])
+        path = self.write([{"summary": "First"}])
+        result = self.run_issues("bulk", "PAY", str(path))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(len(self.posts()), 2)
+        self.assertIn("PAY-1", result.stdout)
+        self.assertIn("Created: 1   Failed: 0", result.stdout)
+        self.assertIn("3", self.slept())  # the wait Retry-After asked for
+        self.assertFalse((self.tmp / "tickets.remaining.json").exists())
+
+    def test_a_partial_failure_writes_only_the_failed_entries(self):
+        self.routes([
+            {"method": "POST", "match": "/rest/api/3/issue", "body_contains": "Second",
+             "status": 400, "body": json.dumps({"errors": {"labels": "bad label"}})},
+            created("PAY-1"),
+        ])
+        path = self.write(self.ENTRIES)
+        result = self.run_issues("bulk", "PAY", str(path))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Created: 2   Failed: 1", result.stdout)
+        self.assertIn("bad label", result.stderr)
+        remaining = self.tmp / "tickets.remaining.json"
+        self.assertIn(str(remaining), result.stdout)
+        self.assertEqual(json.loads(remaining.read_text()), [self.ENTRIES[1]])
+        self.assertEqual(json.loads(path.read_text()), self.ENTRIES)
+
+    def test_a_network_failure_fails_the_item_not_the_run(self):
+        self.routes([
+            {"method": "POST", "match": "/rest/api/3/issue", "body_contains": "First",
+             "curl_exit": 7},
+            created("PAY-2"),
+        ])
+        path = self.write(self.ENTRIES)
+        result = self.run_issues("bulk", "PAY", str(path))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Created: 2   Failed: 1", result.stdout)
+        remaining = json.loads((self.tmp / "tickets.remaining.json").read_text())
+        self.assertEqual(remaining, [self.ENTRIES[0]])
+
+    def test_a_limit_that_does_not_clear_stops_the_run(self):
+        self.routes([
+            {"method": "POST", "match": "/rest/api/3/issue", "body_contains": "First",
+             "body": json.dumps({"key": "PAY-1"}), "status": 201},
+            {"method": "POST", "match": "/rest/api/3/issue", "status": 429,
+             "headers": {"Retry-After": "1"}, "body": "{}"},
+        ])
+        path = self.write(self.ENTRIES)
+        result = self.run_issues("bulk", "PAY", str(path))
+        self.assertEqual(result.returncode, 1)
+        # First created; Second tried twice; Third never sent.
+        self.assertEqual([p["fields"]["summary"] for p in self.posts()],
+                         ["First", "Second", "Second"])
+        self.assertIn("Stopping", result.stderr)
+        remaining = json.loads((self.tmp / "tickets.remaining.json").read_text())
+        self.assertEqual(remaining, self.ENTRIES[1:])
+
+    def test_a_remaining_file_that_all_goes_through_is_emptied(self):
+        self.routes([created("PAY-3")])
+        path = self.write([self.ENTRIES[2]], name="tickets.remaining.json")
+        result = self.run_issues("bulk", "PAY", str(path))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(path.read_text()), [])
+
+    def test_a_dry_run_does_not_sleep_or_send(self):
+        path = self.write(self.ENTRIES * 5)
+        result = self.run_issues("bulk", "PAY", str(path), "--dry-run")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.slept(), [])
+        self.assertEqual(self.requests(), [])
+        self.assertIn("Would create: 15", result.stdout)
+
+    def test_a_fields_object_reaches_the_payload(self):
+        self.routes([created("PAY-1")])
+        path = self.write([{"summary": "First", "fields": {
+            "customfield_10050": "Ops", "components": [{"name": "Backend"}]}}])
+        result = self.run_issues("bulk", "PAY", str(path))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        fields = self.posts()[0]["fields"]
+        self.assertEqual(fields["customfield_10050"], "Ops")
+        self.assertEqual(fields["components"], [{"name": "Backend"}])
+        self.assertEqual(fields["summary"], "First")
+
+    def test_fields_cannot_set_a_field_that_has_its_own_key(self):
+        path = self.write([{"summary": "First", "fields": {"summary": "Other"}},
+                           {"summary": "Second", "fields": ["not", "an", "object"]}])
+        result = self.run_issues("bulk", "PAY", str(path), "--dry-run")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("cannot set summary", result.stderr)
+        self.assertIn("must be an object", result.stderr)
+        self.assertEqual(self.requests(), [])
+
+
+class TestNoUnsourcedRequestRate(unittest.TestCase):
+    """"Roughly 60 requests a minute" was stated in four places with no
+    source. Atlassian publishes per-second burst limits and an hourly
+    points quota instead. A request rate may appear only beside the link."""
+
+    RATE = re.compile(r"\b\d+\s*(?:authenticated\s+)?(?:requests?|calls?)\s*(?:a|an|per|/)\s*(?:second|minute|hour)", re.I)
+
+    def test_no_file_states_a_rate_without_a_source(self):
+        repo = SKILL.parents[1]
+        files = subprocess.run(["git", "ls-files"], cwd=repo, capture_output=True,
+                               text=True, check=True).stdout.split()
+        offenders = []
+        for name in files:
+            if "/tests/" in name or not name.endswith((".md", ".sh", ".py", ".json")):
+                continue
+            for n, line in enumerate((repo / name).read_text(encoding="utf-8").splitlines(), 1):
+                if self.RATE.search(line) and "developer.atlassian.com" not in line:
+                    offenders.append(f"{name}:{n}: {line.strip()}")
+        self.assertEqual(offenders, [])
+
+    def test_the_old_claim_would_be_caught(self):
+        self.assertTrue(self.RATE.search("roughly 60 requests a minute"))
+        self.assertTrue(self.RATE.search("(roughly 60 requests/minute)"))
 
 
 if __name__ == "__main__":

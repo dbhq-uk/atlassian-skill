@@ -224,9 +224,9 @@ api_fail() {
         404) echo "Fix: check the project key or issue key exists and is visible to you." >&2 ;;
         429)
             if [ -n "${API_RETRY_AFTER:-}" ]; then
-                echo "Fix: rate limited (roughly 60 requests/minute). The API says wait ${API_RETRY_AFTER}s, then retry." >&2
+                echo "Fix: rate limited. The API says wait ${API_RETRY_AFTER}s, then retry. See https://developer.atlassian.com/cloud/jira/platform/rate-limiting/" >&2
             else
-                echo "Fix: rate limited (roughly 60 requests/minute). Wait a minute and retry." >&2
+                echo "Fix: rate limited. Wait a few seconds, doubling the wait each time, then retry. See https://developer.atlassian.com/cloud/jira/platform/rate-limiting/" >&2
             fi
             ;;
     esac

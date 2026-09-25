@@ -48,7 +48,9 @@ ${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh bulk <PROJECT> tickets.json [--dry-ru
 
 Only `summary` is required; `type` defaults to `Task`. Blank lines in a description become separate paragraphs - REST v3 needs Atlassian Document Format, and the script builds it, so pass plain text.
 
-**A project that requires a field this payload does not name - a custom field, or a component with no default - is not a dead end.** `create` (not `bulk`) takes `--field KEY=VALUE`, repeatable, merged into `fields` last: read the field id with `jira-meta.sh fields <PROJECT> <TYPE>` first, then `--field customfield_10050=Ops` or `--field components='[{"name":"Backend"}]'` for anything that needs a shape rather than a string - a value that parses as JSON is sent as JSON, anything else as plain text. It refuses to set the seven fields the dedicated options already cover (`project`, `issuetype`, `summary`, `description`, `labels`, `priority`, `parent`) - use those instead.
+An entry can carry a `fields` object for anything else, the same as `create`'s `--field`: `"fields": {"customfield_10050": "Ops", "components": [{"name": "Backend"}]}`. Values go as written, since they are already JSON. It cannot set the seven fields that have their own key.
+
+**A project that requires a field this payload does not name - a custom field, or a component with no default - is not a dead end.** `create` takes `--field KEY=VALUE` (and a `bulk` entry takes a `fields` object), repeatable, merged into `fields` last: read the field id with `jira-meta.sh fields <PROJECT> <TYPE>` first, then `--field customfield_10050=Ops` or `--field components='[{"name":"Backend"}]'` for anything that needs a shape rather than a string - a value that parses as JSON is sent as JSON, anything else as plain text. It refuses to set the seven fields the dedicated options already cover (`project`, `issuetype`, `summary`, `description`, `labels`, `priority`, `parent`) - use those instead.
 
 **Use `--dry-run` first on anything bulk.** It prints the exact payload and sends nothing.
 
@@ -127,5 +129,7 @@ ${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh mine [max]
 
 ## Limits
 
-Jira Cloud allows roughly 60 authenticated requests a minute. `bulk` paces itself at one a second and reports `Created:` and `Failed:` counts at the end; a partial failure leaves the successful issues in place.
+Jira Cloud limits requests per second per endpoint, and a points quota per hour, rather than by a fixed figure a minute. On a 429 it sends `Retry-After`, in seconds. See [Rate limiting](https://developer.atlassian.com/cloud/jira/platform/rate-limiting/).
+
+`bulk` pauses a second between creates. On a 429 it waits for `Retry-After` (2 seconds if there is none) and retries that issue once; if the limit has not cleared, or asks for more than a minute, it stops sending. It reports `Created:` and `Failed:` counts at the end. A partial failure leaves the created issues in place, and writes every entry that was not created to a remaining file, exactly as it was in the file: `tickets.json` gives `tickets.remaining.json`. Fix what failed, then run `bulk` on that file: it sends only those, and never repeats an issue that was created. A run of a remaining file writes back to the same file, and empties it once everything in it is created.
 
