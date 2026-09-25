@@ -461,8 +461,6 @@ marketplace, and all of them are documented at
 | [groupwork](https://skills.dbhq.uk/groupwork/) | A second agent on the work, adversary or partner |
 | [headwork](https://skills.dbhq.uk/headwork/) | One decision at a time, with a recommendation |
 
-Plus [heliograph](https://skills.dbhq.uk/heliograph/), for a machine you cannot log into.
-
 ## Licence
 
 MIT. See [LICENSE](LICENSE).

@@ -10,11 +10,11 @@ response within 48 hours.
 
 ### Network
 
-Jira Cloud REST API v3, Confluence Cloud REST API v2, and the Confluence v1
-attachment-upload endpoint - the one place this repository still uses v1,
-because v2 has no attachment equivalent. All three go over HTTPS, at the site
-URL you configure, or at `api.atlassian.com` for a scoped token (see below).
-Nothing else, and no telemetry.
+Jira Cloud REST API v3 and Confluence Cloud REST API v2, plus two Confluence
+v1 endpoints that v2 has no equivalent for: the attachment upload and the CQL
+search. Every call goes over HTTPS, to the site URL you configure, or to
+`api.atlassian.com` for a scoped token (see below). Nothing else, and no
+telemetry.
 
 ### Credentials
 

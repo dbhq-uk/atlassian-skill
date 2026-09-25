@@ -95,13 +95,17 @@ api_url() {
 
 # api <METHOD> <PATH> [JSON_BODY]
 # PATH is appended to the product's base (see api_url), e.g. /rest/api/3/myself
-# Sets API_BODY and API_STATUS. Prints nothing.
+# Sets API_BODY, API_STATUS and API_PATH. Prints nothing.
 #
 # Call it as a plain statement, never as $(api ...) - a command substitution
 # runs in a subshell, so API_STATUS would never reach the caller.
 api() {
     local method="$1" path="$2" body="${3:-}"
     local cfg out curl_status
+    # Which API the call went to, so api_fail can word its advice for Jira
+    # or for Confluence.
+    # shellcheck disable=SC2034
+    API_PATH="$path"
 
     # PATH is built from caller-supplied values (an issue key, a page id, a
     # CQL query) and lands verbatim inside a curl -K config file as
@@ -205,12 +209,34 @@ api_ok() {
     esac
 }
 
-# api_fail <response> <context> - report a Jira error as cause + fix, then exit 1.
+# api_fail <response> <context> - report a Jira or Confluence error as cause +
+# fix, then exit 1. The product is read from API_PATH, the last call's path.
+#
+# The error shapes differ. Jira sends errorMessages (a list) and errors (an
+# object of field: message). Confluence v2 sends errors as a list of objects
+# with a title and a detail. Confluence v1 sends a message.
 api_fail() {
-    local response="$1" context="$2" msg
+    local response="$1" context="$2" msg product="Jira"
+    local limits="https://developer.atlassian.com/cloud/jira/platform/rate-limiting/"
+    case "${API_PATH:-}" in
+        /wiki/*)
+            product="Confluence"
+            limits="https://developer.atlassian.com/cloud/confluence/rate-limiting/"
+            ;;
+    esac
     echo "Error: $context failed (HTTP $API_STATUS)." >&2
     msg=$(printf '%s' "$response" | jq -r '
-        ((.errorMessages // []) + ((.errors // {}) | to_entries | map("\(.key): \(.value)")))
+        def text: if type == "string" then . else tojson end;
+        ((.errorMessages // [])
+         + (if (.errors | type) == "array"
+            then [.errors[] | if type == "object"
+                              then ([.title, .detail, .message] | map(select(. != null and . != "")) | map(text) | join(": "))
+                              else text end]
+            elif (.errors | type) == "object"
+            then (.errors | to_entries | map("\(.key): \(.value | text)"))
+            else [] end)
+         + (if (.message | type) == "string" and .message != "" then [.message] else [] end))
+        | map(select(. != ""))
         | if length > 0 then join("; ") else empty end' 2>/dev/null)
     if [ -n "$msg" ]; then
         echo "Cause: $msg" >&2
@@ -220,13 +246,25 @@ api_fail() {
     case "$API_STATUS" in
         401) echo "Fix: the token was refused. It may have expired (an API token lasts at most one year), been revoked, or not belong to this email. A scoped token is also refused for a scope it was not given. Create a new token, then run setup again in your own terminal:" >&2
              echo "  $(setup_path)" >&2 ;;
-        403) echo "Fix: your account lacks permission for this project." >&2 ;;
-        404) echo "Fix: check the project key or issue key exists and is visible to you." >&2 ;;
+        403)
+            if [ "$product" = "Confluence" ]; then
+                echo "Fix: your account lacks permission for this space or page." >&2
+            else
+                echo "Fix: your account lacks permission for this project." >&2
+            fi
+            ;;
+        404)
+            if [ "$product" = "Confluence" ]; then
+                echo "Fix: check the page id or space id exists and is visible to you." >&2
+            else
+                echo "Fix: check the project key or issue key exists and is visible to you." >&2
+            fi
+            ;;
         429)
             if [ -n "${API_RETRY_AFTER:-}" ]; then
-                echo "Fix: rate limited. The API says wait ${API_RETRY_AFTER}s, then retry. See https://developer.atlassian.com/cloud/jira/platform/rate-limiting/" >&2
+                echo "Fix: rate limited. The API says wait ${API_RETRY_AFTER}s, then retry. See $limits" >&2
             else
-                echo "Fix: rate limited. Wait a few seconds, doubling the wait each time, then retry. See https://developer.atlassian.com/cloud/jira/platform/rate-limiting/" >&2
+                echo "Fix: rate limited. Wait a few seconds, doubling the wait each time, then retry. See $limits" >&2
             fi
             ;;
     esac
