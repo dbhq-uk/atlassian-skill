@@ -19,8 +19,13 @@ Create:
   bulk <PROJECT> <file.json> [--dry-run]
         file.json is an array: [{"summary": "...", "type": "Task",
                                  "description": "...", "labels": ["a"],
-                                 "priority": "High", "parent": "ABC-1"}]
-        "type" defaults to Task. Every other field is optional.
+                                 "priority": "High", "parent": "ABC-1",
+                                 "fields": {"customfield_10050": "Ops"}}]
+        "type" defaults to Task. Every other field is optional. "fields"
+        works like create's --field. A rate limit (429) is waited out and
+        retried once. Anything not created is written to a remaining
+        file (tickets.json gives tickets.remaining.json), so a re-run of
+        that file sends only those.
 
 Read:
   get <ISSUE-KEY> [--comments N]
@@ -100,6 +105,23 @@ create_issue() {
     local key
     key=$(printf '%s' "$response" | jq -r '.key')
     echo "$key  $SITE/browse/$key"
+}
+
+# bulk_post <payload> - one create request for bulk. It runs in a subshell,
+# so a network failure fails this item rather than ending the run. Sets
+# POST_STATUS, POST_RETRY_AFTER and POST_BODY; POST_STATUS is 000 when the
+# request did not complete.
+bulk_post() {
+    local out nl=$'\n' rest
+    if out=$(api POST "/rest/api/3/issue" "$1"
+             printf '%s\n%s\n%s' "$API_STATUS" "$API_RETRY_AFTER" "$API_BODY"); then
+        POST_STATUS="${out%%"$nl"*}"
+        rest="${out#*"$nl"}"
+        POST_RETRY_AFTER="${rest%%"$nl"*}"
+        POST_BODY="${rest#*"$nl"}"
+    else
+        POST_STATUS="000"; POST_RETRY_AFTER=""; POST_BODY=""
+    fi
 }
 
 case "${1:-}" in
@@ -191,15 +213,31 @@ case "${1:-}" in
             echo "Error: $FILE must contain a JSON array of issue objects." >&2; exit 1; }
 
         COUNT=$(jq 'length' "$FILE")
+        # Where the entries not created go. A re-run of a remaining file
+        # writes back to that same file, so it only ever shrinks.
+        case "$FILE" in
+            *.remaining.json) REMAINING_FILE="$FILE" ;;
+            *.json)           REMAINING_FILE="${FILE%.json}.remaining.json" ;;
+            *)                REMAINING_FILE="$FILE.remaining.json" ;;
+        esac
         echo "$COUNT issue(s) to create in $PROJECT."
         [ "$DRY" = "1" ] && echo "(dry run - nothing will be sent)"
         echo
 
-        CREATED=0; FAILED=0
+        CREATED=0; FAILED=0; NOT_SENT="[]"; STOPPED=""
         for i in $(seq 0 $((COUNT - 1))); do
+            # Once a rate limit has not cleared, send nothing more: every
+            # further request would be refused too. The rest go to the
+            # remaining file untouched.
+            if [ -n "$STOPPED" ]; then
+                NOT_SENT=$(printf '%s' "$NOT_SENT" | jq -c --argjson i "$i" '. + [$i]')
+                FAILED=$((FAILED + 1))
+                continue
+            fi
             SUMMARY=$(jq -r --argjson i "$i" '.[$i].summary // empty' "$FILE")
             if [ -z "$SUMMARY" ]; then
                 echo "[$((i + 1))/$COUNT] skipped: no summary" >&2
+                NOT_SENT=$(printf '%s' "$NOT_SENT" | jq -c --argjson i "$i" '. + [$i]')
                 FAILED=$((FAILED + 1))
                 continue
             fi
@@ -208,36 +246,100 @@ case "${1:-}" in
             LABELS=$(jq -c --argjson i "$i" '.[$i].labels // []' "$FILE")
             PRIORITY=$(jq -r --argjson i "$i" '.[$i].priority // ""' "$FILE")
             PARENT=$(jq -r --argjson i "$i" '.[$i].parent // ""' "$FILE")
+            # "fields" is create's --field, per entry: any field the seven
+            # above do not cover, merged into the payload last. It is
+            # already JSON, so every value goes as written.
+            ENTRY_FIELDS=$(jq -c --argjson i "$i" '.[$i].fields // {}' "$FILE")
+            FIELDS_ERROR=$(printf '%s' "$ENTRY_FIELDS" | jq -r '
+                if type != "object" then "\"fields\" must be an object, e.g. {\"customfield_10050\": \"Ops\"}."
+                else ([keys[] | select(IN("project","issuetype","summary","description","labels","priority","parent"))]
+                      | if length > 0 then "\"fields\" cannot set \(join(", ")) - use the entry'"'"'s own key for it instead." else empty end)
+                end')
+            if [ -n "$FIELDS_ERROR" ]; then
+                echo "[$((i + 1))/$COUNT] skipped: $FIELDS_ERROR" >&2
+                NOT_SENT=$(printf '%s' "$NOT_SENT" | jq -c --argjson i "$i" '. + [$i]')
+                FAILED=$((FAILED + 1))
+                continue
+            fi
             # bulk takes plain-text description only - no --description-file
             # equivalent field, so this always goes through text_to_adf.
             DESC_ADF="null"
             [ -n "$DESCRIPTION" ] && DESC_ADF=$(text_to_adf "$DESCRIPTION")
+            PAYLOAD=$(build_payload "$PROJECT" "$TYPE" "$SUMMARY" "$DESC_ADF" "$LABELS" "$PRIORITY" "$PARENT" "$ENTRY_FIELDS")
 
             if [ "$DRY" = "1" ]; then
                 printf '[%d/%d] %s\n' "$((i + 1))" "$COUNT" "$SUMMARY"
-            else
-                printf '[%d/%d] %s ... ' "$((i + 1))" "$COUNT" "$SUMMARY"
+                printf '%s\n' "$PAYLOAD" | jq .
+                CREATED=$((CREATED + 1))
+                # No request, so nothing to pace: a dry run does not sleep.
+                continue
             fi
-            if RESULT=$(create_issue "$(build_payload "$PROJECT" "$TYPE" "$SUMMARY" "$DESC_ADF" "$LABELS" "$PRIORITY" "$PARENT")" "$DRY" 2>&1); then
-                echo "$RESULT"
+
+            printf '[%d/%d] %s ... ' "$((i + 1))" "$COUNT" "$SUMMARY"
+            bulk_post "$PAYLOAD"
+            if [ "$POST_STATUS" = "429" ]; then
+                # Atlassian's guidance: wait for Retry-After (seconds), or
+                # back off from 2 seconds when there is none. One retry per
+                # item; a wait longer than a minute is not sat through - that
+                # is an hourly quota, and the remaining file is the way back.
+                WAIT="$POST_RETRY_AFTER"
+                case "$WAIT" in ''|*[!0-9]*) WAIT=2 ;; esac
+                if [ "$WAIT" -le 60 ]; then
+                    printf 'rate limited, waiting %ss ... ' "$WAIT"
+                    sleep "$WAIT"
+                    bulk_post "$PAYLOAD"
+                fi
+            fi
+            if [ "$POST_STATUS" = "201" ] || [ "$POST_STATUS" = "200" ]; then
+                KEY=$(printf '%s' "$POST_BODY" | jq -r '.key')
+                echo "$KEY  $SITE/browse/$KEY"
                 CREATED=$((CREATED + 1))
             else
                 echo "FAILED"
-                echo "$RESULT" | sed 's/^/    /' >&2
+                if [ "$POST_STATUS" = "000" ]; then
+                    echo "    the request did not complete - see the error above" >&2
+                else
+                    # api_fail exits, so it runs in a subshell: it words the
+                    # error, and this item fails without ending the run.
+                    ( API_STATUS="$POST_STATUS"; API_RETRY_AFTER="$POST_RETRY_AFTER"
+                      api_fail "$POST_BODY" "creating the issue" ) 2>&1 | sed 's/^/    /' >&2 || true
+                fi
+                NOT_SENT=$(printf '%s' "$NOT_SENT" | jq -c --argjson i "$i" '. + [$i]')
                 FAILED=$((FAILED + 1))
+                if [ "$POST_STATUS" = "429" ]; then
+                    STOPPED=1
+                    echo "Stopping: the rate limit did not clear, so nothing more is sent." >&2
+                fi
             fi
-            # Stay inside the roughly 60 requests/minute limit - one
-            # request a second, not five: 0.2s here used to pace this at
-            # 300/minute, five times faster than the limit the docs claimed.
+            # A pause between creates, so a long file does not arrive as one
+            # burst. Atlassian publishes per-second burst limits and an hourly
+            # points quota rather than a per-minute figure:
+            # https://developer.atlassian.com/cloud/jira/platform/rate-limiting/
             sleep 1
         done
         echo
         if [ "$DRY" = "1" ]; then
             echo "Would create: $CREATED   Skipped: $FAILED   (dry run - nothing was sent)"
-        else
-            echo "Created: $CREATED   Failed: $FAILED"
+            [ "$FAILED" -eq 0 ] || exit 1
+            exit 0
         fi
-        [ "$FAILED" -eq 0 ] || exit 1
+        echo "Created: $CREATED   Failed: $FAILED"
+        if [ "$FAILED" -gt 0 ]; then
+            # The entries exactly as they were in the file, in order, so the
+            # re-run sends the same thing and never repeats an issue that was
+            # created.
+            jq --argjson idx "$NOT_SENT" '[. as $all | $idx[] | $all[.]]' "$FILE" > "$REMAINING_FILE.tmp"
+            mv "$REMAINING_FILE.tmp" "$REMAINING_FILE"
+            echo "The $FAILED not created are in $REMAINING_FILE."
+            echo "Fix what failed, then run: jira-issues.sh bulk $PROJECT $REMAINING_FILE"
+            exit 1
+        fi
+        if [ "$REMAINING_FILE" = "$FILE" ]; then
+            # Every entry is now created. Emptied rather than deleted, so a
+            # second run of it creates nothing twice.
+            echo "[]" > "$FILE"
+            echo "$FILE is now empty: everything in it was created."
+        fi
         ;;
 
     get)

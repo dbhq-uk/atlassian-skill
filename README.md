@@ -266,24 +266,29 @@ with no default. Read the field id with `jira-meta.sh fields` first.
 
 A
 value that parses as JSON is sent as JSON (`--field components='[{"name":"Backend"}]'`);
-anything else goes as plain text. `bulk` has no equivalent - its file format
-only covers the seven built-in fields.
+anything else goes as plain text. In a `bulk` file, an entry takes a `fields`
+object for the same purpose, e.g. `"fields": {"customfield_10050": "Ops"}`.
 
 `bulk` takes a JSON array. Only `summary` is required; `type` defaults to
 `Task`. **Run it with `--dry-run` first** - that prints the exact payload for
 every issue and sends nothing.
 
-A batch paces itself at one request a second
-to stay inside Jira's limit of roughly 60 a minute, and reports `Created:` and
-`Failed:` counts at the end. A partial failure leaves the successful issues in
-place, because there is no rollback: the skill cannot delete.
+A batch pauses a second between creates. On a
+429 it waits for `Retry-After` and retries that issue once, following
+[Atlassian's rate-limiting guidance](https://developer.atlassian.com/cloud/jira/platform/rate-limiting/),
+and stops sending if the limit has not cleared. It reports `Created:` and
+`Failed:` counts at the end. A partial failure leaves the created issues in
+place, because there is no rollback: the skill cannot delete. Every entry that
+was not created goes to a remaining file (`tickets.json` gives
+`tickets.remaining.json`), so a re-run of that file sends only those.
 
 ```json
 [
   {"summary": "Enable the storage provider on the subscription", "type": "Task",
    "description": "Blocks the deployment.\n\nOnly the pipeline identity can do this.",
    "labels": ["infra"], "priority": "High"},
-  {"summary": "Add retry handling to the upload step"}
+  {"summary": "Add retry handling to the upload step",
+   "fields": {"components": [{"name": "Backend"}]}}
 ]
 ```
 
