@@ -12,7 +12,9 @@ from htmlplus import ConversionError, html_to_adf  # noqa: E402
 from htmlplus import adf_to_html, adf_to_markdown  # noqa: E402
 from htmlplus import _opaque_to_html, _opaque_mark_to_html  # noqa: E402
 from htmlplus import check_roundtrip, _first_roundtrip_difference  # noqa: E402
-from htmlplus import html_to_adf_for_jira, CONFLUENCE_ONLY, _walk  # noqa: E402
+from htmlplus import html_to_adf_for_jira, _walk  # noqa: E402
+from htmlplus import JIRA_LISTED_NODES, JIRA_INFERRED_NODES  # noqa: E402
+from htmlplus import JIRA_NODES, JIRA_MARKS, JIRA_NODE_LIST_URL  # noqa: E402
 import htmlplus  # noqa: E402
 
 
@@ -1050,8 +1052,8 @@ class TestUnsupportedAdfNode(unittest.TestCase):
     shape attachments.sh upload produces) - at which point a mediaSingle no
     longer demonstrated "a node this converter cannot render by name", it
     demonstrated the opposite. Swapped for bodiedExtension, which this
-    converter has no named HTML+ syntax for at all (see CONFLUENCE_ONLY's
-    own note on it, below) and so remains a genuine example of this class's
+    converter has no named HTML+ syntax for at all (see TestJiraProfile's
+    note on it, below) and so remains a genuine example of this class's
     premise.
     """
 
@@ -2033,11 +2035,69 @@ class TestRoundtripGate(unittest.TestCase):
 class TestJiraProfile(unittest.TestCase):
     """Jira's ADF profile is narrower than Confluence's.
 
-    A status lozenge and a decision list are Confluence nodes. Jira renders
-    neither, and a description containing one is accepted and then displays as
-    nothing at all - the worst kind of failure, because it looks like it
-    worked.
+    html_to_adf_for_jira lets through only the nodes and marks Atlassian
+    lists for Jira, plus taskList and taskItem, which that list implies. A
+    description carrying anything else can be accepted by the API and then
+    show as nothing on the issue, so it is refused by name before anything
+    is sent.
     """
+
+    # The sets as they stood when the profile was last checked. See
+    # docs/jira-profile.md. If you change JIRA_LISTED_NODES,
+    # JIRA_INFERRED_NODES or JIRA_MARKS, repeat that check, record the
+    # result there, and only then change these to match.
+    CHECKED_LISTED_NODES = {
+        "doc",
+        "blockquote", "bodiedSyncBlock", "bulletList", "codeBlock", "expand",
+        "heading", "mediaGroup", "mediaSingle", "orderedList", "panel",
+        "paragraph", "rule", "syncBlock", "table", "multiBodiedExtension",
+        "blockTaskItem", "extensionFrame", "listItem", "media",
+        "nestedExpand", "tableCell", "tableHeader", "tableRow",
+        "date", "emoji", "hardBreak", "inlineCard", "mention", "status",
+        "text", "mediaInline",
+    }
+    CHECKED_INFERRED_NODES = {"taskList", "taskItem"}
+    CHECKED_MARKS = {
+        "border", "code", "em", "link", "strike", "strong", "subsup",
+        "textColor", "underline",
+    }
+
+    def test_the_profile_is_pinned_to_the_checked_set(self):
+        msg = ("The Jira profile changed. Repeat the check in "
+               "docs/jira-profile.md and record the result there first.")
+        self.assertEqual(set(JIRA_LISTED_NODES), self.CHECKED_LISTED_NODES, msg)
+        self.assertEqual(set(JIRA_INFERRED_NODES),
+                         self.CHECKED_INFERRED_NODES, msg)
+        self.assertEqual(set(JIRA_MARKS), self.CHECKED_MARKS, msg)
+
+    def test_every_type_in_the_profile_is_a_real_adf_type(self):
+        # A typo in the profile would refuse a node Jira supports and never
+        # say why. Each name has to be a "type" the vendored schema defines.
+        # Two listed types are newer than the vendored schema. They are
+        # named here so a third cannot slip in unnoticed.
+        schema = json.loads((SCRIPTS / "adf-schema" / "full.json").read_text())
+        known = set()
+        for body in schema["definitions"].values():
+            for part in [body] + body.get("allOf", []):
+                known.update(
+                    part.get("properties", {}).get("type", {}).get("enum", [])
+                )
+        newer_than_the_schema = {"extensionFrame", "multiBodiedExtension"}
+        self.assertEqual(set(JIRA_NODES | JIRA_MARKS) - known,
+                         newer_than_the_schema)
+
+    def test_the_inference_holds_in_the_vendored_schema(self):
+        # taskList passes only because Atlassian lists blockTaskItem and the
+        # schema allows a blockTaskItem nowhere but inside a taskList. If the
+        # schema ever gives it another parent, the inference is gone.
+        schema = json.loads((SCRIPTS / "adf-schema" / "full.json").read_text())
+        parents = sorted(
+            name for name, body in schema["definitions"].items()
+            if name != "blockTaskItem_node"
+            and "#/definitions/blockTaskItem_node" in json.dumps(body)
+        )
+        self.assertEqual(parents, ["taskList_node"])
+        self.assertIn("blockTaskItem", JIRA_LISTED_NODES)
 
     def test_paragraphs_panels_and_code_pass(self):
         doc = html_to_adf_for_jira(
@@ -2048,24 +2108,44 @@ class TestJiraProfile(unittest.TestCase):
         types = [n["type"] for n in doc["content"]]
         self.assertEqual(types, ["paragraph", "panel", "codeBlock"])
 
-    def test_task_lists_and_tables_pass(self):
+    def test_tables_pass(self):
         doc = html_to_adf_for_jira(
-            '<ul data-type="task-list">'
-            '<li data-type="task-item"><input type="checkbox"> A</li></ul>'
             '<table data-width="400"><tbody><tr>'
             '<td data-colwidth="400"><p>x</p></td></tr></tbody></table>'
         )
-        self.assertEqual(
-            [n["type"] for n in doc["content"]], ["taskList", "table"]
-        )
+        self.assertEqual([n["type"] for n in doc["content"]], ["table"])
 
-    def test_a_status_lozenge_is_refused(self):
-        with self.assertRaises(ConversionError) as cm:
-            html_to_adf_for_jira(
-                '<p><span data-type="status" data-color="green">Built</span></p>'
-            )
-        self.assertIn("status", str(cm.exception))
-        self.assertIn("Jira", str(cm.exception))
+    def test_a_status_lozenge_passes(self):
+        # Refused until 25 Sep 2026 as "Confluence-only". Atlassian lists
+        # status as a Jira inline node.
+        doc = html_to_adf_for_jira(
+            '<p><span data-type="status" data-color="green">Built</span></p>'
+        )
+        self.assertEqual(doc["content"][0]["content"][0]["type"], "status")
+
+    def test_an_expand_passes(self):
+        # Refused until 25 Sep 2026 as "Confluence-only". Atlassian lists
+        # expand as a Jira top-level block node.
+        doc = html_to_adf_for_jira(
+            "<details><summary>Log</summary><p>x</p></details>"
+        )
+        self.assertEqual(doc["content"][0]["type"], "expand")
+
+    def test_an_expand_in_a_table_cell_passes_as_a_nested_expand(self):
+        doc = html_to_adf_for_jira(
+            "<table><tbody><tr><td><details><summary>More</summary>"
+            "<p>x</p></details></td></tr></tbody></table>"
+        )
+        cell = doc["content"][0]["content"][0]["content"][0]
+        self.assertEqual(cell["content"][0]["type"], "nestedExpand")
+
+    def test_task_lists_pass_as_the_one_inference(self):
+        doc = html_to_adf_for_jira(
+            '<ul data-type="task-list">'
+            '<li data-type="task-item"><input type="checkbox"> A</li></ul>'
+        )
+        self.assertEqual(doc["content"][0]["type"], "taskList")
+        self.assertEqual(doc["content"][0]["content"][0]["type"], "taskItem")
 
     def test_a_decision_list_is_refused(self):
         with self.assertRaises(ConversionError) as cm:
@@ -2074,6 +2154,8 @@ class TestJiraProfile(unittest.TestCase):
                 '<li data-type="decision-item" data-state="DECIDED">x</li></ul>'
             )
         self.assertIn("decisionList", str(cm.exception))
+        self.assertIn("Jira", str(cm.exception))
+        self.assertIn(JIRA_NODE_LIST_URL, str(cm.exception))
 
     def test_a_layout_section_is_refused(self):
         with self.assertRaises(ConversionError) as cm:
@@ -2084,31 +2166,41 @@ class TestJiraProfile(unittest.TestCase):
             )
         self.assertIn("layoutSection", str(cm.exception))
 
-    def test_a_status_hidden_in_an_opaque_wrapper_is_still_refused(self):
-        # This check runs against the parsed tree html_to_adf returns, not
-        # against the HTML+ source, checking CONFLUENCE_ONLY membership. That
-        # is only safe if a Confluence-only node smuggled in through the
-        # generic <span data-type="adf-opaque"> wrapper comes back out with
-        # its real type restored rather than staying "adf-opaque" - proved
-        # here rather than assumed. _opaque_to_html builds exactly the wire
-        # form _node_to_html/_inline_to_html would have produced for this
-        # node had it come from a live page with no named support for it.
-        opaque_span = _opaque_to_html(
-            {"type": "status", "attrs": {"text": "Built", "color": "green"}},
-            tag="span",
-        )
+    def test_a_block_card_is_refused(self):
+        # Not on Atlassian's list. inlineCard is, so a smart link still
+        # works inline.
         with self.assertRaises(ConversionError) as cm:
-            html_to_adf_for_jira(f"<p>{opaque_span}</p>")
-        self.assertIn("status", str(cm.exception))
+            html_to_adf_for_jira(
+                '<a href="https://example.com/x" data-card-appearance="block"></a>'
+            )
+        self.assertIn("blockCard", str(cm.exception))
+
+    def test_an_alignment_mark_is_refused_as_a_mark(self):
+        with self.assertRaises(ConversionError) as cm:
+            html_to_adf_for_jira('<p data-align="center">Centred.</p>')
+        self.assertIn("alignment mark", str(cm.exception))
+        self.assertIn("Jira", str(cm.exception))
+
+    def test_a_decision_list_hidden_in_an_opaque_wrapper_is_still_refused(self):
+        # The check runs against the parsed tree html_to_adf returns, not
+        # against the HTML+ source. That is only safe if a node smuggled in
+        # through the generic opaque wrapper comes back out with its real
+        # type restored rather than staying "adf-opaque" - proved here.
+        opaque_div = _opaque_to_html({
+            "type": "decisionList", "attrs": {"localId": "d1"},
+            "content": [{"type": "decisionItem",
+                         "attrs": {"localId": "i1", "state": "DECIDED"},
+                         "content": [{"type": "text", "text": "x"}]}],
+        })
+        with self.assertRaises(ConversionError) as cm:
+            html_to_adf_for_jira(opaque_div)
+        self.assertIn("decisionList", str(cm.exception))
         self.assertIn("Jira", str(cm.exception))
 
     def test_bodied_extension_is_refused_even_though_it_only_ever_arrives_opaque(self):
-        # Unlike status/decisionList/decisionItem/expand/layoutSection/
-        # layoutColumn, this converter has no native HTML+ syntax for
-        # bodiedExtension at all - so this is the one CONFLUENCE_ONLY member
-        # that can only ever reach html_to_adf_for_jira through the opaque
-        # wrapper, and the case that actually exercises the passthrough
-        # path for real rather than merely by construction.
+        # This converter has no named HTML+ syntax for bodiedExtension, so it
+        # can only ever reach html_to_adf_for_jira through the opaque
+        # wrapper. It exercises the passthrough path for real.
         opaque_div = _opaque_to_html({
             "type": "bodiedExtension",
             "attrs": {"extensionType": "com.atlassian.confluence.macro.core",
@@ -2122,55 +2214,48 @@ class TestJiraProfile(unittest.TestCase):
         self.assertIn("Jira", str(cm.exception))
 
     def test_walk_visits_a_nodes_marks_not_just_its_content(self):
-        # Structural regression test for _walk itself, independent of what
-        # CONFLUENCE_ONLY currently holds. The first version of _walk only
-        # descended into "content", never into a text node's "marks" - so a
-        # mark's restored type (see _decode_adf and the ADF_OPAQUE_MARK
-        # branch) was reachable in the tree but invisible to this walk. A
-        # future addition to CONFLUENCE_ONLY would have silently never
-        # fired for a mark. annotation has no named HTML+ syntax in this
-        # converter (no INLINE_MARKS entry, no dedicated handle_starttag
-        # branch), so it can only ever arrive through the opaque wrapper -
-        # the same property bodiedExtension has among node types.
+        # Structural regression test for _walk. The first version only
+        # descended into "content", never into "marks", so a mark's restored
+        # type was in the tree but invisible to the check. annotation has no
+        # named HTML+ syntax, so it can only arrive through the opaque
+        # wrapper.
         opaque_mark_span = _opaque_mark_to_html(
             {"type": "annotation", "attrs": {"id": "1"}}, "flagged",
         )
-        doc = html_to_adf_for_jira(f"<p>{opaque_mark_span}</p>")
-        types = {n.get("type") for n in _walk(doc)}
-        self.assertIn("annotation", types)
+        doc = html_to_adf(f"<p>{opaque_mark_span}</p>")
+        self.assertIn(("mark", "annotation"),
+                      {(kind, item.get("type")) for kind, item in _walk(doc)})
 
-    def test_a_mark_declared_confluence_only_is_refused_even_hidden_opaquely(self):
-        # CONFLUENCE_ONLY holds no mark type today - a mark only decorates
-        # already-visible text, so nothing here has ever produced the
-        # invisible-content failure a missing block node does. This proves
-        # the defence works end to end for the day one is added, rather
-        # than resting on the structural check above alone: with
-        # "annotation" declared refused, exactly the way it can only ever
-        # arrive (opaquely - see the previous test), it has to be caught.
-        CONFLUENCE_ONLY.add("annotation")
-        self.addCleanup(CONFLUENCE_ONLY.discard, "annotation")
+    def test_a_mark_not_on_the_list_is_refused_even_hidden_opaquely(self):
         opaque_mark_span = _opaque_mark_to_html(
             {"type": "annotation", "attrs": {"id": "1"}}, "flagged",
         )
         with self.assertRaises(ConversionError) as cm:
             html_to_adf_for_jira(f"<p>{opaque_mark_span}</p>")
-        self.assertIn("annotation", str(cm.exception))
+        self.assertIn("annotation mark", str(cm.exception))
         self.assertIn("Jira", str(cm.exception))
 
-    def test_an_opaque_type_jira_can_render_still_passes(self):
-        # The refusal is scoped to CONFLUENCE_ONLY, not to opaque
-        # passthrough in general - an unrecognised node this converter has
-        # no named support for, but that is not in CONFLUENCE_ONLY, still
-        # converts. Whether Jira itself renders an "extension" node is a
-        # question this task does not answer; the point here is narrower:
-        # html_to_adf_for_jira does not refuse it just for being opaque.
-        opaque_div = _opaque_to_html({
-            "type": "extension",
-            "attrs": {"extensionType": "com.atlassian.confluence.macro.core",
-                      "extensionKey": "com.example.macro", "parameters": {}},
-        })
-        doc = html_to_adf_for_jira(opaque_div)
-        self.assertEqual(doc["content"][0]["type"], "extension")
+    def test_an_opaque_node_on_the_list_still_passes(self):
+        # The refusal is scoped to the list, not to opaque passthrough in
+        # general. A mention has no named HTML+ syntax here, so it arrives
+        # opaquely, and Atlassian lists it for Jira.
+        opaque_span = _opaque_to_html(
+            {"type": "mention", "attrs": {"id": "abc", "text": "@Sam"}},
+            tag="span",
+        )
+        doc = html_to_adf_for_jira(f"<p>ask {opaque_span} please</p>")
+        self.assertEqual(doc["content"][0]["content"][1]["type"], "mention")
+
+    def test_the_cli_refuses_with_the_message_and_exit_1(self):
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPTS / "htmlplus.py"), "to-adf-jira"],
+            input='<ul data-type="decision-list">'
+                  '<li data-type="decision-item" data-state="DECIDED">x</li></ul>',
+            capture_output=True, text=True,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertIn("decisionList", proc.stderr)
+        self.assertEqual(proc.stdout, "")
 
 
 class TestLocalIdGeneralisation(unittest.TestCase):

@@ -32,10 +32,11 @@ payload and sends nothing.
 
 --description-file takes an HTML+ fragment and formats it through the same
 converter Confluence pages use - a real panel, a syntax-highlighted code
-block, real checkboxes, instead of a wall of plain text. --description-file
-refuses a Confluence-only component (a status lozenge, a decision list, an
-expand, a layout) that Jira would accept and then render as nothing. It is
-mutually exclusive with the plain-text [description]; pass one or the other.
+block, a table, a status lozenge, instead of a wall of plain text.
+--description-file refuses any node Atlassian does not list for Jira (a
+decision list, a layout, a block card, a Confluence macro), which Jira may
+accept and then render as nothing. It is mutually exclusive with the
+plain-text [description]; pass one or the other.
 
 --field KEY=VALUE (repeatable) sets any field project/type/summary/
 description/labels/priority/parent do not cover - a project-specific

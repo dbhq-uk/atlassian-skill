@@ -56,7 +56,7 @@ Every successful create prints the issue key and its browse URL.
 
 ## Formatted descriptions
 
-`--description-file` takes an HTML+ fragment in place of the plain-text `[description]`, so a description can carry a real panel, a syntax-highlighted code block and real checkboxes instead of a wall of text:
+`--description-file` takes an HTML+ fragment in place of the plain-text `[description]`, so a description can carry a real panel, a syntax-highlighted code block, a table and a status lozenge instead of a wall of text:
 
 ```bash
 ${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh create PAY Task "Confirm the egress address" \
@@ -74,13 +74,15 @@ And if it exists, read `~/.dbhq/atlassian/house-style.md` too. That is the user'
 
 Work through `${CLAUDE_SKILL_DIR}/references/checklist.md` against the body before you send it. Both reference files are written primarily for a Confluence page - skip the sections with no Jira equivalent (page titles, cross-page smart links) and read the rest as it applies to an issue description.
 
-**Jira's ADF profile is narrower than Confluence's, and `--description-file` refuses what does not fit it.** A status lozenge, a decision list, an expand and a multi-column layout are Confluence-only components. The Jira API accepts a description containing one and then renders nothing where it should be - the worst kind of failure, because it looks like it worked. `--description-file` refuses these before anything is sent, naming the node:
+**Jira's ADF profile is narrower than Confluence's, and `--description-file` refuses what is not on it.** The profile is [Atlassian's list of the nodes and marks Jira supports](https://developer.atlassian.com/cloud/jira/platform/apis/document/structure/). A decision list, a multi-column layout, a block or embed card and a Confluence macro are not on it. Jira may accept a description containing one and then show nothing where it should be, which looks like it worked. `--description-file` refuses these before anything is sent, naming the node:
 
 ```
-Error: A status is Confluence-only and Jira does not render it. The API would accept the description and show nothing. Use a panel, a table, a code block or a task list instead.
+Error: A decisionList is not on Atlassian's list of the nodes Jira supports, so the API may accept the description and show nothing where it should be. Use a panel, a table, a code block, a heading or a list instead. The list: https://developer.atlassian.com/cloud/jira/platform/apis/document/structure/
 ```
 
-Panels, code blocks with language highlighting, task lists, tables and headings all render correctly in a Jira issue - reach for those instead of the refused component.
+Panels, code blocks with language highlighting, tables, headings, lists, status lozenges and expands are all on Atlassian's list. Reach for those. A centred or indented paragraph is refused too, because Jira does not list those marks.
+
+A task list passes, but it is an inference rather than a listed node: Atlassian lists a block task item, which only exists inside a task list. Until a live check confirms it renders, use a bullet list or a table for anything the reader must not miss.
 
 ## Writing the issue text
 

@@ -149,7 +149,9 @@ silent repair you never see at all.
 
 And because a Jira v3 issue description is ADF too, the same converter
 formats a ticket. A ticket with a real warning panel, a syntax-highlighted
-code block and real checkboxes, rather than a wall of plain text.
+code block and a status lozenge, rather than a wall of plain text. Jira's
+profile is narrower than Confluence's, so a ticket only takes the nodes
+Atlassian lists for Jira - see [`docs/jira-profile.md`](docs/jira-profile.md).
 
 ## A known limit: the round-trip gate
 

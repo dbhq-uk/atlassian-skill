@@ -203,7 +203,7 @@ text_to_adf() {
 }
 
 # htmlplus_jira <html-file> - convert an HTML+ fragment to ADF for a Jira field.
-# Refuses the Confluence-only nodes Jira does not render. Emits the ADF
+# Refuses any node or mark not on Atlassian's Jira list. Emits the ADF
 # document as JSON on stdout; exits 1 with the converter's message on stderr.
 #
 # Named for the script rather than the operation so it cannot be confused with
