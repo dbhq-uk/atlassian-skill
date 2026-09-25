@@ -145,9 +145,10 @@ esac
 TOKEN="${TOKEN//[[:space:]]/}"
 [ -n "$TOKEN" ] || { echo "Error: the token is required. Nothing was saved." >&2; exit 1; }
 
-# verify <path> - call SITE+path with the entered credentials.
-# Sets STATUS and BODY. The token goes in a 0600 curl config file, never on
-# the command line, so it stays out of ps output and shell history.
+# verify <url> [auth] - call a URL, with the entered credentials unless the
+# second argument is "anonymous". Sets STATUS and BODY. The token goes in a
+# 0600 curl config file, never on the command line, so it stays out of ps
+# output and shell history.
 verify() {
     local cfg out nl
     cfg=$(mktemp); chmod 600 "$cfg"
@@ -156,8 +157,8 @@ verify() {
     # file naming the token in plain text sitting in /tmp.
     trap 'rm -f "$cfg"' EXIT INT TERM HUP
     {
-        printf 'url = "%s%s"\n' "$SITE" "$1"
-        printf 'user = "%s:%s"\n' "$EMAIL" "$TOKEN"
+        printf 'url = "%s"\n' "$1"
+        [ "${2:-}" = "anonymous" ] || printf 'user = "%s:%s"\n' "$EMAIL" "$TOKEN"
         printf 'header = "Accept: application/json"\n'
         printf 'silent\nshow-error\n'
         printf 'write-out = "\\n%%{http_code}"\n'
@@ -169,15 +170,53 @@ verify() {
     BODY="${out%"$nl"*}"
 }
 
+# The URL may only be a plain https host: it goes inside a quoted curl config
+# value, where a double quote or a newline would start a second directive.
+case "$SITE" in
+    *'"'*|*$'\n'*|*' '*) echo "Error: '$SITE' is not a site URL." >&2; exit 1 ;;
+esac
+
 # --- Verify before writing anything ---
+# Two kinds of API token. A classic token calls the site itself. A scoped
+# token (one created with scopes) must call Atlassian's gateway,
+# api.atlassian.com/ex/<product>/<cloud id>, and the site answers it with
+# 401. So try the site first and, on a 401, the gateway. /myself is the
+# probe because it has no anonymous answer: other endpoints can return 200
+# and an empty list to a token the site does not recognise. The cloud id
+# comes from the site's public tenant_info, which needs no credential.
+GATEWAY="https://api.atlassian.com/ex"
+JIRA_BASE="$SITE"
+CONFLUENCE_BASE="$SITE"
+SCOPED="no"
+verify "$SITE/_edge/tenant_info" anonymous
+CLOUD_ID=""
+if [ "$STATUS" = "200" ]; then
+    CLOUD_ID=$(printf '%s' "$BODY" | jq -r '.cloudId // empty' 2>/dev/null || true)
+    # A cloud id is a UUID. Anything else is not put into a URL.
+    case "$CLOUD_ID" in
+        *[!0-9a-fA-F-]*) CLOUD_ID="" ;;
+    esac
+fi
+
 echo
 echo "Verifying Jira access at $SITE/rest/api/3/myself ..."
-verify "/rest/api/3/myself"
+verify "$SITE/rest/api/3/myself"
+if [ "$STATUS" = "401" ] && [ -n "$CLOUD_ID" ]; then
+    echo "The site refused the token. Trying it as a scoped token at $GATEWAY/jira/$CLOUD_ID ..."
+    verify "$GATEWAY/jira/$CLOUD_ID/rest/api/3/myself"
+    if [ "$STATUS" = "200" ]; then
+        SCOPED="yes"
+        JIRA_BASE="$GATEWAY/jira/$CLOUD_ID"
+        CONFLUENCE_BASE="$GATEWAY/confluence/$CLOUD_ID"
+    fi
+fi
 if [ "$STATUS" != "200" ]; then
     echo "Error: verification failed (HTTP $STATUS). Nothing was saved." >&2
     case "$STATUS" in
-        401) echo "Cause: the email and token were rejected." >&2
-             echo "Fix: check the token is for this account and has not been revoked." >&2 ;;
+        401) echo "Cause: the email and token were rejected, at the site and, for a scoped token, at api.atlassian.com." >&2
+             echo "Fix: check the token belongs to this email's account and has not been revoked or expired. An API token lasts at most one year. A scoped token also needs the Jira scopes listed in SECURITY.md." >&2 ;;
+        403) echo "Cause: the token was accepted but may not read your own profile." >&2
+             echo "Fix: a scoped token needs the scopes listed in SECURITY.md." >&2 ;;
         404) echo "Cause: no Jira REST API at that site URL." >&2
              echo "Fix: check the site URL." >&2 ;;
         000) echo "Cause: could not reach the site." >&2
@@ -193,13 +232,17 @@ ACCOUNT=$(printf '%s' "$BODY" | jq -r '.accountId // "unknown"')
 # token can be valid for Jira and carry no Confluence licence, and a Jira-only
 # install is legitimate - so say what is unavailable and save anyway, rather
 # than refusing a credential that works for the skill the user came for.
-echo "Verifying Confluence access at $SITE/wiki/api/v2/spaces ..."
-verify "/wiki/api/v2/spaces?limit=1"
+echo "Verifying Confluence access at $CONFLUENCE_BASE/wiki/api/v2/spaces ..."
+verify "$CONFLUENCE_BASE/wiki/api/v2/spaces?limit=1"
 CONFLUENCE="yes"
 if [ "$STATUS" != "200" ]; then
     CONFLUENCE="no"
     echo "Warning: no Confluence access (HTTP $STATUS)." >&2
-    echo "Cause: this account has no Confluence licence on $SITE, or the site has no Confluence." >&2
+    if [ "$SCOPED" = "yes" ]; then
+        echo "Cause: this account has no Confluence licence on $SITE, the site has no Confluence, or the token has no Confluence scopes." >&2
+    else
+        echo "Cause: this account has no Confluence licence on $SITE, or the site has no Confluence." >&2
+    fi
     echo "Fix: the Jira commands will work. The Confluence commands and publish.sh will not until that is granted." >&2
 fi
 
@@ -223,7 +266,11 @@ trap 'rm -f "$TMP_CONFIG"' EXIT INT TERM HUP
 # only in this one child process's environment, which is not world-readable
 # the way its argv is.
 if ! TOKEN="$TOKEN" jq -n --arg site "$SITE" --arg email "$EMAIL" --arg conf "$CONFLUENCE" \
-        '{site: $site, email: $email, token: env.TOKEN, confluence: ($conf == "yes")}' \
+        --arg scoped "${SCOPED:-no}" --arg cloud "${CLOUD_ID:-}" \
+        --arg jira_base "${JIRA_BASE:-}" --arg confluence_base "${CONFLUENCE_BASE:-}" \
+        '{site: $site, email: $email, token: env.TOKEN, confluence: ($conf == "yes"),
+          scoped: ($scoped == "yes"), cloud_id: $cloud,
+          jira_base: $jira_base, confluence_base: $confluence_base}' \
         > "$TMP_CONFIG"; then
     umask "$UMASK_OLD"
     echo "Error: could not build the credential file - nothing was saved." >&2
@@ -236,7 +283,7 @@ mv "$TMP_CONFIG" "$CONFIG_FILE"
 
 echo
 echo "Connected as $NAME ($ACCOUNT)."
-echo "Jira: yes.  Confluence: $CONFLUENCE."
+echo "Jira: yes.  Confluence: $CONFLUENCE.  Scoped token: $SCOPED."
 echo "Saved to $CONFIG_FILE (permissions 600)."
 echo
 echo "Next: $SCRIPT_DIR/jira-meta.sh projects"

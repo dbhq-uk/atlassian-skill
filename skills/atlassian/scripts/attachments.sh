@@ -117,7 +117,7 @@ chmod 600 "$CFG"
 # the token in plain text sitting in /tmp.
 trap 'rm -f "$CFG"' EXIT INT TERM HUP
 {
-    printf 'url = "%s/wiki/rest/api/content/%s/child/attachment"\n' "$SITE" "$PAGE_ID"
+    printf 'url = "%s"\n' "$(api_url "/wiki/rest/api/content/$PAGE_ID/child/attachment")"
     printf 'user = "%s:%s"\n' "$EMAIL" "$TOKEN"
     printf 'request = "PUT"\n'
     printf 'header = "X-Atlassian-Token: nocheck"\n'

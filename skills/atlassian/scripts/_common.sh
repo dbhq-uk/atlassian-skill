@@ -40,11 +40,13 @@ atlassian_migrate_legacy_config
 # setup_hint - how to run setup, with the full path. Setup asks for the token
 # with the input hidden, so it needs a person at a terminal: an agent hands
 # this line to the user rather than running it.
+setup_path() {
+    printf '%s/atlassian-setup.sh' "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+}
+
 setup_hint() {
-    local dir
-    dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     echo "Fix: run this in your own terminal (it asks for the API token, so an agent cannot run it for you):" >&2
-    echo "  $dir/atlassian-setup.sh" >&2
+    echo "  $(setup_path)" >&2
 }
 
 require_config() {
@@ -61,10 +63,38 @@ require_config() {
         setup_hint
         exit 1
     fi
+    # Where requests go, one base per product. A classic API token calls the
+    # site itself. A scoped token has to call Atlassian's gateway,
+    # api.atlassian.com/ex/<product>/<cloud id>, because the site answers it
+    # with 401. Setup works out which and records both bases. A credential
+    # saved before scoped tokens were supported has neither, so it calls the
+    # site, as it always did.
+    JIRA_BASE=$(jq -r 'if (.jira_base // "") == "" then .site else .jira_base end' "$CONFIG_FILE")
+    CONFLUENCE_BASE=$(jq -r 'if (.confluence_base // "") == "" then .site else .confluence_base end' "$CONFIG_FILE")
+    local base
+    for base in "$JIRA_BASE" "$CONFLUENCE_BASE"; do
+        case "$base" in
+            *'"'*|*$'\n'*|*' '*) ;;
+            https://*) continue ;;
+        esac
+        echo "Error: $CONFIG_FILE holds a request base that is not a plain https URL: $base" >&2
+        setup_hint
+        exit 1
+    done
+}
+
+# api_url <path> - the full URL for an API path such as /rest/api/3/myself or
+# /wiki/api/v2/pages/123. A path under /wiki/ is Confluence; anything else is
+# Jira. See require_config for the two bases.
+api_url() {
+    case "$1" in
+        /wiki/*) printf '%s%s' "$CONFLUENCE_BASE" "$1" ;;
+        *)       printf '%s%s' "$JIRA_BASE" "$1" ;;
+    esac
 }
 
 # api <METHOD> <PATH> [JSON_BODY]
-# PATH is appended to the site, e.g. /rest/api/3/myself
+# PATH is appended to the product's base (see api_url), e.g. /rest/api/3/myself
 # Sets API_BODY and API_STATUS. Prints nothing.
 #
 # Call it as a plain statement, never as $(api ...) - a command substitution
@@ -109,7 +139,7 @@ api() {
     # control flow happens to reach.
     trap 'rm -f "$cfg" "$hdrs"' EXIT INT TERM HUP
     {
-        printf 'url = "%s%s"\n' "$SITE" "$path"
+        printf 'url = "%s"\n' "$(api_url "$path")"
         printf 'user = "%s:%s"\n' "$EMAIL" "$TOKEN"
         printf 'request = "%s"\n' "$method"
         printf 'header = "Accept: application/json"\n'
@@ -188,7 +218,8 @@ api_fail() {
         echo "Cause: $(printf '%s' "$response" | head -c 300)" >&2
     fi
     case "$API_STATUS" in
-        401) echo "Fix: the email or token is wrong. Re-run atlassian-setup.sh." >&2 ;;
+        401) echo "Fix: the token was refused. It may have expired (an API token lasts at most one year), been revoked, or not belong to this email. A scoped token is also refused for a scope it was not given. Create a new token, then run setup again in your own terminal:" >&2
+             echo "  $(setup_path)" >&2 ;;
         403) echo "Fix: your account lacks permission for this project." >&2 ;;
         404) echo "Fix: check the project key or issue key exists and is visible to you." >&2 ;;
         429)
