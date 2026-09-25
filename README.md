@@ -271,9 +271,19 @@ cd ~/.claude/skills/atlassian/scripts
 ./confluence-pages.sh read 1234567 --format markdown             # to understand it, never to edit
 ./confluence-pages.sh create --space 98765 --title "Payment Correlation" \
     --parent 1234567 --body-file /tmp/body.html
+./confluence-pages.sh edit 1234567 --base-version 14 \
+    --replace 5f1c2a9e --body-file /tmp/fragment.html --dry-run
 ./confluence-pages.sh update 1234567 --body-file /tmp/current.html \
     --base-version 14 --message "Added the egress address"
 ```
+
+`edit` changes one block and leaves the rest of the page alone. It converts
+only your fragment and splices it into the live page by local id - in place
+of a block (`--replace`), after it (`--insert-after`) or at the end
+(`--append`). Nothing else on the page goes through the converter, so the
+round-trip gate only checks the block being replaced. `update` rewrites the
+whole body. Both take `--dry-run`, which sends nothing and names every node
+the write would remove.
 
 Every `read` prints the page's current version and the exact flag an update
 needs: `# page id 1234567, version 14 - pass --base-version 14 to update`. That
@@ -363,7 +373,8 @@ all (`` ```c++ ``), not restricted to a plain word.
 | `skills/atlassian/scripts/jira-meta.sh` | Projects, issue types, fields, priorities, read-only |
 | `skills/atlassian/scripts/jira-issues.sh` | Create, bulk create, get, search |
 | `skills/atlassian/scripts/confluence-search.sh` | Spaces, CQL and free-text search |
-| `skills/atlassian/scripts/confluence-pages.sh` | Read, create, update - the stale-write and round-trip guards |
+| `skills/atlassian/scripts/confluence-pages.sh` | Read, create, edit, update - the stale-write and round-trip guards |
+| `skills/atlassian/scripts/adf_edit.py` | Splices a fragment into a page by local id, and says what a write would remove |
 | `skills/atlassian/scripts/publish.sh` | The dry-run/create/update run, and the write-back of `page_id` |
 | `skills/atlassian/scripts/md_to_htmlplus.py` | Markdown to HTML+, with raw HTML+ passed through |
 | `skills/atlassian/scripts/frontmatter.py` | Reads and writes the YAML binding, without `eval` |

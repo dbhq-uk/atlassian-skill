@@ -61,9 +61,38 @@ ${CLAUDE_SKILL_DIR}/scripts/confluence-pages.sh create \
 
 `--space` takes the numeric space **id** from `confluence-search.sh spaces`, not the key. `--parent` is a page id and is validated the same way `read` and `update` validate theirs - anything non-numeric is refused before a request is built. A zero-byte or otherwise empty body file is refused before anything is sent - it would otherwise convert to a valid, empty document.
 
+## Editing one block
+
+**To change one part of a page, use `edit`, not `update`.** It converts only your fragment and splices it into the live page by local id. Every other node on the page is carried through as it came, without passing through the converter - a macro, an inline comment, anything this converter has no HTML+ for.
+
+1. **Read the page** in `--format html`. Note the version from the header, and the `data-local-id` of the block you want to change, or the block your new content goes after.
+2. **Write the fragment** - the new block or blocks, as HTML+.
+3. **Dry-run it**, then run it for real with the same `--base-version`.
+
+```bash
+${CLAUDE_SKILL_DIR}/scripts/confluence-pages.sh read 1234567 > /tmp/current.html
+# note the version and the data-local-id of the block to change
+${CLAUDE_SKILL_DIR}/scripts/confluence-pages.sh edit 1234567 --base-version 14 \
+  --replace 5f1c2a9e --body-file /tmp/fragment.html --dry-run
+${CLAUDE_SKILL_DIR}/scripts/confluence-pages.sh edit 1234567 --base-version 14 \
+  --replace 5f1c2a9e --body-file /tmp/fragment.html --message "Corrected the egress address"
+```
+
+- `--replace <local-id>` puts the fragment in place of that block.
+- `--insert-after <local-id>` puts it straight after that block, in the same container.
+- `--append` adds it at the end of the page.
+
+The fragment is checked where it will land: a table after a list item is refused, because a list item cannot hold one. An expand after a block inside a table cell becomes a nested expand.
+
+`edit` targets a block. A local id on an inline node - a lozenge, a date, an inline card - is refused; use the id of the paragraph it sits in. So is a table row or cell, or a layout column; target a block inside it, or the whole table or layout.
+
+**The round-trip gate only checks the block being replaced**, so `edit` works on a page `update` refuses. `--insert-after` and `--append` replace nothing, so they check nothing. `--base-version` works exactly as it does for `update`, below.
+
+`--dry-run` sends nothing. It prints the top-level block count before and after, and every node the write would remove: each node whose local id would be gone, and each node with no named HTML+ form that would no longer be there.
+
 ## Updating a page
 
-**An update replaces the whole body. There is no partial edit, and `update` requires `--base-version <n>` - the version number your edit was composed against.** This is not a formality:
+**An update replaces the whole body, and `update` requires `--base-version <n>` - the version number your edit was composed against.** Use it to rewrite a page; use `edit` above to change part of one. `--dry-run` works the same way as `edit`'s: it sends nothing and names what the new body would remove. The `--base-version` rule is not a formality:
 
 - Re-reading the page right before you write does **not**, by itself, protect anything. It only makes the version number correct at the instant of the write - which is exactly the check that a stale write needs to fail.
 - `--base-version` is what makes the refusal possible. `update` re-reads the live page itself immediately before writing, and if the page's current version does not match the `--base-version` you passed, it refuses instead of overwriting whatever landed in between.
@@ -99,10 +128,10 @@ If the page carries something this converter cannot reproduce exactly, `update` 
 ```
 Error: page 1234567 ("Payment Correlation") cannot be safely edited through this skill.
 Cause: a "table" node does not survive converting to HTML+ and back to ADF unchanged.
-Fix: nothing was sent. This page carries something this converter cannot round-trip exactly - editing it here risks silently losing part of it that your change never touched.
+Fix: nothing was sent. This page carries something this converter cannot round-trip exactly - editing it here risks silently losing part of it that your change never touched. To change one block, use edit with that block's local id.
 ```
 
-This means the page has a node type, or an attribute on one, that this converter cannot carry through unchanged - writing would silently alter part of the page your edit never touched, not just the part you meant to change. **Re-reading will not fix this, and there is no bypass and no `--force`.** Stop, and make this edit directly in the Confluence UI instead.
+This means the page has a node type, or an attribute on one, that this converter cannot carry through unchanged - writing would silently alter part of the page your edit never touched, not just the part you meant to change. **Re-reading will not fix this, and there is no bypass and no `--force`.** If your change is to one block, use `edit` - it only checks that block. Otherwise make the change in the Confluence UI.
 
 **This used to refuse often - a live-site measurement once found it on roughly half of real pages.** The cause was never an exotic node type: paragraphs, headings, tables, ordered lists, layout sections and code blocks are ordinary, and it was their own attributes and marks - a local id, a colspanned cell's per-column widths, a list's start number, the editor's "make this wide" toggle - that this converter dropped rather than carried through. Generalising the same carry-through-or-opaque-passthrough rule that already covered media to every named node type closed that gap: the same measurement now passes cleanly. What still refuses is narrower - a node type or an attribute this converter has never modelled at all reaching this converter's own opaque-passthrough ceiling, or the column-width consistency check firing on a table a person actually left inconsistent. That is still expected on a page with editing history outside this skill, not a sign anything is broken.
 
@@ -125,7 +154,8 @@ It also rejects a `data-colwidth` that is not a plain number, and a column where
 ## Constraints
 
 - **No delete.** Not for a page, not for a space, not for an attachment.
-- **`update` always needs `--base-version`.** Read the page, take the version from its header, splice, update with that version - see [§ Updating a page](#updating-a-page).
+- **`update` and `edit` always need `--base-version`.** Read the page, take the version from its header, and pass it - see [§ Updating a page](#updating-a-page).
+- **Change one block with `edit`, not `update`.** It leaves the rest of the page untouched - see [§ Editing one block](#editing-one-block).
 - **HTML+ in, never markdown and never storage format.** Markdown flattens panels, lozenges, tasks and column widths into bold text.
 - **Never invent an opaque id.**
 - **A page id is numeric.** Anything else is refused before a request is built.
