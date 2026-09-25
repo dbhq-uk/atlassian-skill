@@ -223,7 +223,7 @@ cd ~/.claude/skills/atlassian/scripts
 ./jira-issues.sh create PAY Task "Summary" --description-file /tmp/desc.html
 ./jira-issues.sh create PAY Task "Summary" --field customfield_10050=Ops
 ./jira-issues.sh bulk PAY tickets.json --dry-run
-./jira-issues.sh get PAY-12
+./jira-issues.sh get PAY-12 --comments 10
 ./jira-issues.sh search "assignee = currentUser() AND statusCategory != Done"
 ./jira-issues.sh mine
 ```

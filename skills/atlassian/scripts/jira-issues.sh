@@ -23,7 +23,8 @@ Create:
         "type" defaults to Task. Every other field is optional.
 
 Read:
-  get <ISSUE-KEY>            Show one issue
+  get <ISSUE-KEY> [--comments N]
+                             Show one issue and its last N comments (default 5)
   search <JQL> [max]         Search with JQL (default 25 results)
   mine [max]                 Open issues assigned to you
 
@@ -241,25 +242,21 @@ case "${1:-}" in
 
     get)
         KEY="${2:-}"
-        [ -n "$KEY" ] || { echo "Usage: jira-issues.sh get <ISSUE-KEY>" >&2; exit 1; }
+        [ -n "$KEY" ] || { echo "Usage: jira-issues.sh get <ISSUE-KEY> [--comments N]" >&2; exit 1; }
+        SHOW_COMMENTS=5
+        if [ "${3:-}" = "--comments" ]; then
+            SHOW_COMMENTS="${4:-}"
+            case "$SHOW_COMMENTS" in
+                ''|*[!0-9]*) echo "Error: --comments needs a number, e.g. --comments 10." >&2; exit 1 ;;
+            esac
+        elif [ -n "${3:-}" ]; then
+            echo "Error: unknown option '$3'. Usage: jira-issues.sh get <ISSUE-KEY> [--comments N]" >&2
+            exit 1
+        fi
         api GET "/rest/api/3/issue/$KEY?fields=summary,status,issuetype,assignee,reporter,priority,labels,created,updated,description"
         RESPONSE="$API_BODY"
         api_ok || api_fail "$RESPONSE" "fetching $KEY"
         printf '%s' "$RESPONSE" | jq -r --arg site "$SITE" '
-            # ADF nests text arbitrarily deep (a list item holds a paragraph
-            # holds the text), so collect it recursively. A one-level map
-            # silently renders a bulleted description as empty.
-            def nodetext:
-                [recurse(.content[]?)
-                 | if   .type == "text"       then .text
-                   elif .type == "inlineCard" then (.attrs.url // "")
-                   elif .type == "hardBreak"  then "\n"
-                   else empty end]
-                | join("");
-            def blocktext:
-                if .type == "bulletList" or .type == "orderedList"
-                then [.content[]? | "  - " + nodetext] | join("\n")
-                else nodetext end;
             "\(.key)  \(.fields.summary)",
             "URL:      \($site)/browse/\(.key)",
             "Type:     \(.fields.issuetype.name)",
@@ -269,8 +266,45 @@ case "${1:-}" in
             "Labels:   \(if (.fields.labels | length) > 0 then (.fields.labels | join(", ")) else "none" end)",
             "Updated:  \(.fields.updated)",
             "",
-            "Description:",
-            ((.fields.description.content // []) | map(blocktext) | map(select(length > 0)) | join("\n") | if . == "" then "  (empty)" else . end)'
+            "Description:"'
+        # The description goes through the same converter a Confluence page
+        # is read with. A hand-written jq renderer used to stand here, and it
+        # knew only text, links and line breaks: a table came out as one run
+        # of words, a nested list lost its nesting, and a mention vanished.
+        DESC=$(printf '%s' "$RESPONSE" | jq -c '.fields.description // empty')
+        if [ -z "$DESC" ]; then
+            echo "  (empty)"
+        else
+            printf '%s' "$DESC" | htmlplus_markdown || echo "  (the description could not be rendered - see the error above)"
+            echo
+        fi
+
+        # Comments come from their own endpoint, newest first, because the
+        # comment list embedded in the issue is not guaranteed to be the
+        # latest. Shown oldest to newest, so they read as a conversation.
+        [ "$SHOW_COMMENTS" -gt 0 ] || exit 0
+        api GET "/rest/api/3/issue/$KEY/comment?orderBy=-created&maxResults=$SHOW_COMMENTS"
+        COMMENTS="$API_BODY"
+        api_ok || api_fail "$COMMENTS" "fetching the comments on $KEY"
+        TOTAL=$(printf '%s' "$COMMENTS" | jq '.total // (.comments | length)')
+        SHOWN=$(printf '%s' "$COMMENTS" | jq '.comments | length')
+        echo
+        if [ "$SHOWN" -eq 0 ]; then
+            echo "Comments: none"
+            exit 0
+        fi
+        if [ "$TOTAL" -gt "$SHOWN" ]; then
+            echo "Comments (the last $SHOWN of $TOTAL - raise --comments to see more):"
+        else
+            echo "Comments ($SHOWN):"
+        fi
+        printf '%s' "$COMMENTS" | jq -c '.comments | reverse | .[]' | while IFS= read -r comment; do
+            echo
+            printf '%s' "$comment" | jq -r '"-- \(.author.displayName // "unknown"), \(.created // "")"'
+            printf '%s' "$comment" | jq -c '.body // {"type": "doc", "version": 1, "content": []}' \
+                | htmlplus_markdown || echo "  (this comment could not be rendered - see the error above)"
+            echo
+        done
         ;;
 
     search)

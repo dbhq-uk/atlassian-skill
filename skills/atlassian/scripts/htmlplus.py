@@ -2099,9 +2099,17 @@ def adf_to_html(doc):
 # --- ADF to markdown, one way only ---
 
 def _inline_md(node):
+    """Render a block's inline content as markdown text.
+
+    Every inline node leaves something behind. A mention used to vanish, so
+    "ask @Sam please" read as "ask  please", and an agent reading the issue
+    could not tell that anybody had been asked. An inline node with no
+    rendering here is marked rather than dropped, the same as a block node.
+    """
     out = []
     for child in node.get("content", []):
         t = child.get("type")
+        a = child.get("attrs", {})
         if t == "text":
             text = child["text"]
             for mark in child.get("marks", []):
@@ -2110,18 +2118,41 @@ def _inline_md(node):
                     text = f"**{text}**"
                 elif mt == "em":
                     text = f"*{text}*"
+                elif mt == "strike":
+                    text = f"~~{text}~~"
                 elif mt == "code":
                     text = f"`{text}`"
                 elif mt == "link":
-                    text = f'[{text}]({mark["attrs"]["href"]})'
+                    text = f'[{text}]({mark.get("attrs", {}).get("href", "")})'
             out.append(text)
         elif t == "status":
-            out.append(f'[{child["attrs"]["text"]}]')
+            out.append(f'[{a.get("text", "")}]')
         elif t == "date":
-            out.append(_timestamp_to_iso(child["attrs"]["timestamp"]))
+            out.append(_timestamp_to_iso(a["timestamp"]))
         elif t == "inlineCard":
-            out.append(child["attrs"]["url"])
+            out.append(a.get("url", ""))
+        elif t == "mention":
+            name = a.get("text") or a.get("id") or "someone"
+            out.append(name if name.startswith("@") else f"@{name}")
+        elif t == "emoji":
+            out.append(a.get("text") or a.get("shortName") or "")
+        elif t == "hardBreak":
+            out.append("\n")
+        elif t == "placeholder":
+            out.append(a.get("text", ""))
+        else:
+            out.append(f"[unsupported node: {t}]")
     return "".join(out)
+
+
+def _table_cell_md(cell):
+    """One table cell as a single markdown table cell.
+
+    A cell can hold a list or several paragraphs, and a newline or a bare
+    pipe inside it would end the row early, so both are escaped.
+    """
+    text = " ".join(_node_to_md(c) for c in cell.get("content", []))
+    return text.strip().replace("|", "\\|").replace("\n", "<br>")
 
 
 def _node_to_md(node, depth=0):
@@ -2149,13 +2180,15 @@ def _node_to_md(node, depth=0):
     if t == "decisionItem":
         return f'- ({a.get("state", "DECIDED").lower()}) {_inline_md(node).strip()}'
     if t in ("bulletList", "orderedList"):
-        marker = "-" if t == "bulletList" else "1."
-        return "\n".join(
-            f"{'  ' * depth}{marker} "
-            + "\n".join(_node_to_md(g, depth + 1)
-                        for g in c.get("content", [])).strip()
-            for c in node.get("content", [])
-        )
+        # An ordered list keeps its own numbers, starting from "order".
+        start = int(a.get("order") or 1) if t == "orderedList" else None
+        lines = []
+        for i, item in enumerate(node.get("content", [])):
+            marker = "-" if start is None else f"{start + i}."
+            inner = "\n".join(_node_to_md(g, depth + 1)
+                              for g in item.get("content", [])).strip()
+            lines.append(f"{'  ' * depth}{marker} {inner}")
+        return "\n".join(lines)
     if t in ("expand", "nestedExpand"):
         inner = "\n\n".join(_node_to_md(c) for c in node.get("content", []))
         return f'**{a.get("title", "")}**\n\n{inner}'
@@ -2167,8 +2200,7 @@ def _node_to_md(node, depth=0):
     if t == "table":
         rows = []
         for row in node.get("content", []):
-            cells = [" ".join(_node_to_md(c) for c in cell.get("content", []))
-                     for cell in row.get("content", [])]
+            cells = [_table_cell_md(cell) for cell in row.get("content", [])]
             rows.append("| " + " | ".join(cells) + " |")
             if len(rows) == 1:
                 rows.append("|" + "|".join([" --- "] * len(cells)) + "|")
