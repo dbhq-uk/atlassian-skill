@@ -32,6 +32,7 @@ from htmlplus import (
     _fully_modelled,
     _node_to_html,
     html_to_adf,
+    normalise,
 )
 
 # A fragment cannot be converted on its own inside these: a row needs its
@@ -100,7 +101,7 @@ def _survives(node, parent_type):
         back = html_to_adf(_node_to_html(node, parent_type), parent=parent_type)
     except ConversionError:
         return False
-    return back.get("content") == [node]
+    return normalise(back.get("content") or []) == normalise([node])
 
 
 def splice(doc, op, local_id, fragment):
@@ -191,7 +192,12 @@ _ASSIGNED_ON_SAVE_BY_TYPE = {"media": {"width", "height"},
 
 def same(new, live):
     """Whether live already holds new, ignoring what Confluence assigns on
-    save and new never states. Anything else that differs counts."""
+    save and new never states, and the differences normalise removes.
+    Anything else that differs counts."""
+    return _same(normalise(new), normalise(live))
+
+
+def _same(new, live):
     if isinstance(new, dict) and isinstance(live, dict) and isinstance(new.get("type"), str):
         if set(new) - {"attrs"} != set(live) - {"attrs"}:
             return False
@@ -201,9 +207,9 @@ def same(new, live):
             return False
         if any(k not in new_attrs and k not in ignorable for k in live_attrs):
             return False
-        return all(same(new[k], live[k]) for k in new if k != "attrs")
+        return all(_same(new[k], live[k]) for k in new if k != "attrs")
     if isinstance(new, list) and isinstance(live, list):
-        return len(new) == len(live) and all(same(a, b) for a, b in zip(new, live))
+        return len(new) == len(live) and all(_same(a, b) for a, b in zip(new, live))
     return new == live
 
 

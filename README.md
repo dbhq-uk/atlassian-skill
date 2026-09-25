@@ -186,7 +186,12 @@ Atlassian lists for Jira - see [`docs/jira-profile.md`](docs/jira-profile.md).
 
 `confluence-pages.sh update` refuses to overwrite a page whose current
 content this converter cannot read back unchanged - value equality on the
-parsed ADF, not a byte-identical comparison. `edit` only checks the block it
+parsed ADF, not a byte-identical comparison. Both documents are normalised
+first, so an empty `attrs`, `content` or `marks` and a missing one compare
+equal, and so do two adjacent text nodes with the same marks and one node
+holding both. A table the converter cannot convert back at all, such as one
+with a column width on some cells and not others, is refused the same way,
+naming the table. `edit` only checks the block it
 replaces, and `publish.sh` does not run the gate at all: it replaces the page
 with the file by design, and checks instead that nobody edited the page in
 Confluence since the last publish.

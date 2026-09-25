@@ -195,6 +195,20 @@ class TestEdit(_Harness):
         self.assertIn("listItem", result.stderr)
         self.assertEqual(self.requests("PUT"), [])
 
+    def test_a_block_stored_as_split_text_can_be_replaced(self):
+        # Confluence can store one run of text as two adjacent text nodes.
+        # HTML+ has no seam between them, so they come back as one. That
+        # carries nothing, and must not stop the block being replaced.
+        self.page({"type": "doc", "version": 1, "content": [
+            {"type": "paragraph", "attrs": {"localId": "p1"}, "content": [
+                {"type": "text", "text": "Fir"}, {"type": "text", "text": "st"}]},
+            MACRO]})
+        result = self.run_pages("edit", "1234567", "--base-version", "5",
+                                "--replace", "p1", "--body-file", self.body("<p>New</p>"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        after = json.loads(self.put_payload()["body"]["value"])
+        self.assertEqual(after["content"][0]["content"][0]["text"], "New")
+
     def test_edit_works_on_a_page_update_refuses(self):
         # The gate only checks the node being replaced, so a page with an
         # inconsistent table elsewhere can still be edited.
@@ -277,6 +291,19 @@ class TestUpdate(_Harness):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("--base-version was 3; the page is now at version 5", result.stderr)
         self.assertEqual(self.requests("PUT"), [])
+
+    def test_a_page_with_empty_attrs_and_split_text_passes_the_gate(self):
+        # Each of these carries nothing, and each refused before the gate
+        # normalised both documents.
+        self.page({"type": "doc", "version": 1, "content": [
+            {"type": "paragraph", "attrs": {}, "content": [
+                {"type": "text", "text": "a", "marks": []},
+                {"type": "text", "text": "b"}]},
+            {"type": "paragraph", "content": []}]})
+        result = self.run_pages("update", "1234567", "--base-version", "5",
+                                "--body-file", self.body("<p>x</p>"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.requests("PUT")), 1)
 
     def test_the_round_trip_gate_refuses_and_nothing_is_sent(self):
         self.page(UNROUNDTRIPPABLE_ADF)
@@ -380,6 +407,29 @@ class TestPublish(_Harness):
         # Confluence assigns local ids on save; they must not count as a change.
         for node in written["content"]:
             node.setdefault("attrs", {})["localId"] = "assigned"
+        self.page(written, version=6, message=self.published())
+        self.log.unlink()
+        result = self.publish()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Unchanged", result.stdout)
+        self.assertEqual(self.requests("PUT"), [])
+
+    def test_a_page_stored_in_an_equivalent_form_is_unchanged(self):
+        # Confluence may hand back empty attrs or content, or one run of
+        # text as two nodes. None of that is a change to publish.
+        self.page(PAGE_ADF, version=5, message=self.published())
+        self.publish()
+        written = json.loads(self.put_payload()["body"]["value"])
+        for node in written["content"]:
+            node.setdefault("attrs", {})
+            for child in node.get("content", []):
+                if child.get("type") == "text" and len(child["text"]) > 1:
+                    text = child["text"]
+                    index = node["content"].index(child)
+                    node["content"][index:index + 1] = [
+                        {"type": "text", "text": text[:1], "marks": []},
+                        {"type": "text", "text": text[1:]}]
+                    break
         self.page(written, version=6, message=self.published())
         self.log.unlink()
         result = self.publish()

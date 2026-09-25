@@ -12,6 +12,7 @@ from htmlplus import ConversionError, html_to_adf  # noqa: E402
 from htmlplus import adf_to_html, adf_to_markdown  # noqa: E402
 from htmlplus import _opaque_to_html, _opaque_mark_to_html  # noqa: E402
 from htmlplus import check_roundtrip, _first_roundtrip_difference  # noqa: E402
+from htmlplus import normalise, roundtrip_problem  # noqa: E402
 from htmlplus import html_to_adf_for_jira, _walk  # noqa: E402
 from htmlplus import JIRA_LISTED_NODES, JIRA_INFERRED_NODES  # noqa: E402
 from htmlplus import JIRA_NODES, JIRA_MARKS, JIRA_NODE_LIST_URL  # noqa: E402
@@ -2085,6 +2086,96 @@ class TestRoundtripGate(unittest.TestCase):
         ok, differing_type = check_roundtrip(doc)
         self.assertTrue(ok)
         self.assertIsNone(differing_type)
+
+
+
+def _doc(*content):
+    return {"type": "doc", "version": 1, "content": list(content)}
+
+
+def _text(text, marks=None):
+    node = {"type": "text", "text": text}
+    if marks is not None:
+        node["marks"] = marks
+    return node
+
+
+class TestRoundtripNormalisation(unittest.TestCase):
+    """The gate compares normalised documents, so a difference that carries
+    nothing does not refuse a page. Each shape here refused before."""
+
+    def test_an_empty_attrs_is_the_same_as_none(self):
+        doc = _doc({"type": "paragraph", "attrs": {}, "content": [_text("a")]})
+        self.assertEqual(check_roundtrip(doc), (True, None))
+
+    def test_an_empty_content_is_the_same_as_none(self):
+        doc = _doc({"type": "paragraph", "content": []})
+        self.assertEqual(check_roundtrip(doc), (True, None))
+
+    def test_an_empty_marks_is_the_same_as_none(self):
+        doc = _doc({"type": "paragraph", "content": [_text("a", marks=[])]})
+        self.assertEqual(check_roundtrip(doc), (True, None))
+
+    def test_two_adjacent_unmarked_text_nodes_are_the_same_as_one(self):
+        doc = _doc({"type": "paragraph", "content": [_text("a"), _text("b")]})
+        self.assertEqual(check_roundtrip(doc), (True, None))
+
+    def test_text_with_different_marks_is_not_merged(self):
+        strong = [{"type": "strong"}]
+        self.assertEqual(
+            normalise([_text("a", strong), _text("b")]),
+            [_text("a", strong), _text("b")],
+        )
+        self.assertEqual(
+            normalise([_text("a", strong), _text("b", strong)]),
+            [_text("ab", strong)],
+        )
+
+    def test_an_attrs_value_is_compared_exactly(self):
+        # A macro's parameters are data. An empty dict inside them is not
+        # the same as a missing key, so normalise must not walk into attrs.
+        node = {"type": "extension", "attrs": {"parameters": {}, "extensionKey": "x"}}
+        self.assertEqual(normalise(node), node)
+
+    def test_a_real_difference_still_refuses(self):
+        # The fixture the gate's other tests use: an expand with no title
+        # key comes back with title "". Normalising must not hide that.
+        doc = _doc({"type": "expand", "attrs": {},
+                    "content": [{"type": "paragraph", "content": [_text("x")]}]})
+        self.assertEqual(check_roundtrip(doc), (False, "expand"))
+
+    def test_a_table_with_widths_on_some_cells_refuses_rather_than_raising(self):
+        def cell(attrs):
+            node = {"type": "tableCell",
+                    "content": [{"type": "paragraph", "content": [_text("c")]}]}
+            if attrs is not None:
+                node["attrs"] = attrs
+            return node
+
+        doc = _doc({"type": "table", "content": [
+            {"type": "tableRow", "content": [cell({"colwidth": [200]})]},
+            {"type": "tableRow", "content": [cell(None)]}]})
+        self.assertEqual(check_roundtrip(doc), (False, "table"))
+        node_type, detail = roundtrip_problem(doc)
+        self.assertEqual(node_type, "table")
+        self.assertIn("data-colwidth is on some cells", detail)
+
+    def test_the_cli_names_the_table_and_the_reason(self):
+        doc = _doc({"type": "table", "content": [
+            {"type": "tableRow", "content": [
+                {"type": "tableCell", "attrs": {"colwidth": [200]},
+                 "content": [{"type": "paragraph", "content": [_text("a")]}]}]},
+            {"type": "tableRow", "content": [
+                {"type": "tableCell",
+                 "content": [{"type": "paragraph", "content": [_text("b")]}]}]}]})
+        r = subprocess.run(
+            [sys.executable, str(SCRIPTS / "htmlplus.py"), "check-roundtrip"],
+            input=json.dumps(doc), capture_output=True, text=True,
+        )
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual(r.stderr.count("\n"), 1, r.stderr)
+        self.assertIn('a "table" node cannot be converted back', r.stderr)
+        self.assertIn("data-colwidth is on some cells", r.stderr)
 
 
 class TestJiraProfile(unittest.TestCase):

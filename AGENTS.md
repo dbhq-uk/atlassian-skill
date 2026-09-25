@@ -103,6 +103,11 @@ there is no `--force`.** Before `confluence-pages.sh update` sends anything, it
 converts the page's current live content back through the converter and
 checks the result matches (Python value equality on the ADF, not a byte- or
 string-identical comparison - `1800.0 == 1800` is equal, and correctly so).
+Both documents go through `htmlplus.normalise` first: an empty `attrs`,
+`content` or `marks` equals a missing one, and adjacent text nodes with the
+same marks equal one merged node. Those differences carry nothing. Do not
+widen `normalise` to anything that does, and never let it walk into `attrs`,
+which is data.
 If it does not - typically because a
 human edited the page directly in the Confluence editor and wrote something
 this converter has no HTML+ form for - the write is refused, because sending

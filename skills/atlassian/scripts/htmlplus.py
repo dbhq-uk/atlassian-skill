@@ -200,7 +200,15 @@ def a_or_an(word):
 
 
 class ConversionError(Exception):
-    """Raised with a message naming the element that could not be converted."""
+    """Raised with a message naming the element that could not be converted.
+
+    node_type, when set, is the ADF type the problem sits on. The round-trip
+    gate reports it when a live page cannot be converted back at all.
+    """
+
+    def __init__(self, message, node_type=None):
+        super().__init__(message)
+        self.node_type = node_type
 
 
 def _date_to_timestamp(value):
@@ -591,12 +599,14 @@ class _Builder(HTMLParser):
                 raise ConversionError(
                     f"Table column {index + 1}: data-colwidth is on some cells "
                     f"and not others. Put it on every cell of the column, "
-                    f"header and body alike, with the same value."
+                    f"header and body alike, with the same value.",
+                    node_type="table",
                 )
             seen = ", ".join(sorted(w for w in seen_widths if w is not None))
             raise ConversionError(
                 f"Table column {index + 1}: two different data-colwidth "
-                f"values ({seen}). Every cell of a column takes the same one."
+                f"values ({seen}). Every cell of a column takes the same one.",
+                node_type="table",
             )
 
     def _current_marks(self):
@@ -2405,10 +2415,74 @@ def _first_roundtrip_difference(original, roundtripped):
     return walk(original, roundtripped, None)
 
 
+def _plain_text(node):
+    """Whether node is a text node carrying nothing but its text and marks."""
+    return (isinstance(node, dict) and node.get("type") == "text"
+            and isinstance(node.get("text"), str)
+            and set(node) <= {"type", "text", "marks"})
+
+
+def normalise(node):
+    """A copy of an ADF node with the differences that carry nothing removed.
+
+    Three shapes mean the same document either way, and a page read from
+    Confluence can hold either form:
+
+    - "attrs": {} and no "attrs" key
+    - "content": [] or "marks": [] and no such key
+    - two adjacent text nodes with the same marks, and one text node
+      holding both texts. The editor merges these itself.
+
+    Only "content" and "marks" are walked. An "attrs" value is data, such
+    as a macro's parameters, and is compared exactly as it came.
+    """
+    if isinstance(node, list):
+        out = []
+        for item in node:
+            item = normalise(item)
+            if (out and _plain_text(item) and _plain_text(out[-1])
+                    and out[-1].get("marks") == item.get("marks")):
+                out[-1] = {**out[-1], "text": out[-1]["text"] + item["text"]}
+            else:
+                out.append(item)
+        return out
+    if isinstance(node, dict):
+        out = {}
+        for key, value in node.items():
+            if key in ("attrs", "content", "marks") and value in ({}, []):
+                continue
+            out[key] = normalise(value) if key in ("content", "marks") else value
+        return out
+    return node
+
+
+def roundtrip_problem(doc):
+    """None if doc survives adf_to_html then html_to_adf unchanged.
+    Otherwise (node_type, detail): the ADF type nearest the first place it
+    does not, and the converter's own message when the page could not be
+    converted back at all (detail is None for an ordinary difference).
+
+    Both documents are normalised first, so a difference that carries
+    nothing (see normalise) is not a refusal.
+    """
+    try:
+        roundtripped = html_to_adf(adf_to_html(doc))
+    except ConversionError as exc:
+        return exc.node_type or "document", str(exc)
+    original, roundtripped = normalise(doc), normalise(roundtripped)
+    if roundtripped == original:
+        return None
+    return _first_roundtrip_difference(original, roundtripped) or "document", None
+
+
 def check_roundtrip(doc):
     """(ok, differing_type) - whether doc survives adf_to_html then
     html_to_adf unchanged, and if not, the ADF type nearest the first
-    place it does not.
+    place it does not. See roundtrip_problem, which also gives the reason.
+
+    A page the converter cannot convert back at all - a table with a
+    column width on some cells and not others, say - is a refusal like any
+    other, not an exception.
 
     "Unchanged" is Python value equality (==), not byte-for-byte string
     identity - deliberately. width: 1800.0 coming back as width: 1800 is
@@ -2431,10 +2505,19 @@ def check_roundtrip(doc):
     partially-supported one. Does not itself decide whether to write; that
     is confluence-pages.sh's call.
     """
-    roundtripped = html_to_adf(adf_to_html(doc))
-    if roundtripped == doc:
+    problem = roundtrip_problem(doc)
+    if problem is None:
         return True, None
-    return False, _first_roundtrip_difference(doc, roundtripped) or "document"
+    return False, problem[0]
+
+
+def _roundtrip_cause(node_type, detail):
+    """One line saying why a page fails the round-trip gate."""
+    if detail:
+        return (f'a "{node_type}" node cannot be converted back to ADF: '
+                f"{detail}")
+    return (f'a "{node_type}" node does not survive converting to HTML+ and '
+            f"back to ADF unchanged.")
 
 
 def main(argv=None):
@@ -2497,7 +2580,7 @@ def main(argv=None):
             # shape this command explains on its own, so it collapses to
             # one line instead of reaching the caller as a stack trace.
             try:
-                ok, differing_type = check_roundtrip(json.load(sys.stdin))
+                problem = roundtrip_problem(json.load(sys.stdin))
             except ConversionError:
                 raise
             except Exception as exc:
@@ -2505,11 +2588,8 @@ def main(argv=None):
                     f"the page body could not be checked "
                     f"({type(exc).__name__}: {exc})."
                 )
-            if not ok:
-                raise ConversionError(
-                    f'a "{differing_type}" node does not survive converting '
-                    f"to HTML+ and back to ADF unchanged."
-                )
+            if problem is not None:
+                raise ConversionError(_roundtrip_cause(*problem))
     except ConversionError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
