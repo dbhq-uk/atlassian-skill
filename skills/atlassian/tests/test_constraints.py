@@ -909,6 +909,28 @@ class TestCredentialMove(unittest.TestCase):
             self.assertFalse(old.exists())
             self.assertTrue((home / ".dbhq" / "atlassian" / "config.json").is_file())
 
+    def test_the_moved_directory_is_700_and_the_config_is_600(self):
+        # A legacy install made before the house rule may be looser. The
+        # move is the one moment the skill touches these, so it tightens
+        # them: the directory to 700, the credential to 600.
+        import json
+        import stat
+        import tempfile
+        for legacy in (".dbhq/jira", ".jira"):
+            with self.subTest(legacy=legacy), tempfile.TemporaryDirectory() as home:
+                home = pathlib.Path(home)
+                old = home / legacy
+                old.mkdir(parents=True)
+                (old / "config.json").write_text(json.dumps({"site": "x"}))
+                old.chmod(0o755)
+                (old / "config.json").chmod(0o644)
+                result = self._run_common(home)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                moved = home / ".dbhq" / "atlassian"
+                self.assertEqual(stat.S_IMODE(moved.stat().st_mode), 0o700)
+                self.assertEqual(stat.S_IMODE((moved / "config.json").stat().st_mode), 0o600)
+                self.assertEqual(stat.S_IMODE((home / ".dbhq").stat().st_mode), 0o700)
+
     def test_a_fresh_install_moves_nothing_and_does_not_fail(self):
         import tempfile
         with tempfile.TemporaryDirectory() as home:

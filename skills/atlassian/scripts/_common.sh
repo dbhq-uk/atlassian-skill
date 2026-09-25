@@ -13,8 +13,9 @@
 #
 # Both moves happen here, on first run, each guarded on the new directory not
 # existing. An install that has never been upgraded moves twice, ~/.jira to
-# ~/.dbhq/jira to ~/.dbhq/atlassian, and that is correct. mv preserves the 600
-# mode on config.json.
+# ~/.dbhq/jira to ~/.dbhq/atlassian, and that is correct. The move also sets
+# the house modes, in case a legacy install was looser: 700 on the directory,
+# 600 on config.json.
 CONFIG_DIR="$HOME/.dbhq/atlassian"
 CONFIG_FILE="$CONFIG_DIR/config.json"
 
@@ -32,6 +33,9 @@ atlassian_migrate_legacy_config() {
     fi
     mv "$from" "$CONFIG_DIR"
     chmod 700 "$CONFIG_DIR" 2>/dev/null || true
+    if [ -f "$CONFIG_FILE" ]; then
+        chmod 600 "$CONFIG_FILE" 2>/dev/null || true
+    fi
     echo "Moved Atlassian credentials from $from to $CONFIG_DIR." >&2
 }
 
