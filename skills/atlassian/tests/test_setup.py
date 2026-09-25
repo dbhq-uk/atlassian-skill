@@ -106,7 +106,10 @@ class TestScripted(_Harness):
         saved = json.loads(self.config.read_text())
         self.assertEqual(saved, {"site": "https://example.atlassian.net",
                                  "email": "e@example.com", "token": TOKEN,
-                                 "confluence": True})
+                                 "confluence": True, "scoped": False,
+                                 "cloud_id": "",
+                                 "jira_base": "https://example.atlassian.net",
+                                 "confluence_base": "https://example.atlassian.net"})
         self.assertEqual(self.config.stat().st_mode & 0o777, 0o600)
         self.assertEqual(self.config.parent.stat().st_mode & 0o777, 0o700)
 
@@ -123,7 +126,9 @@ class TestScripted(_Harness):
         self.assertEqual(self.scripted().returncode, 0)
         for call in self.requests():
             self.assertNotIn(TOKEN, " ".join(call["argv"]))
-            self.assertEqual(call["user"], f"e@example.com:{TOKEN}")
+            # The cloud id lookup is public and is sent no credential.
+            expected = "" if call["url"].endswith("/_edge/tenant_info") else f"e@example.com:{TOKEN}"
+            self.assertEqual(call["user"], expected)
 
     def test_a_token_file_with_no_final_newline_still_works(self):
         result = self.scripted(token=TOKEN)

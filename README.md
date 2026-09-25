@@ -136,6 +136,12 @@ a warning, not a blocker, because a token can be valid for Jira with no
 Confluence licence. Credentials are saved to `~/.dbhq/atlassian/config.json` at
 mode 600, outside any repository.
 
+Setup takes a classic API token or a scoped one (Create API token with scopes),
+and works out which. A scoped token calls `api.atlassian.com` rather than your
+site, and with granular scopes and no `delete:` scope it cannot delete anything
+even if a script tried. [`SECURITY.md`](SECURITY.md#scope-of-the-token) lists
+the scopes. Every API token expires after at most a year; a 401 says so.
+
 The token never reaches a command line, including the multipart request the
 attachment upload builds by hand. `curl` reads it from a 0600 config file, so it
 does not appear in `ps` output or in shell history.

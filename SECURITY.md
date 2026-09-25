@@ -13,12 +13,13 @@ response within 48 hours.
 Jira Cloud REST API v3, Confluence Cloud REST API v2, and the Confluence v1
 attachment-upload endpoint - the one place this repository still uses v1,
 because v2 has no attachment equivalent. All three go over HTTPS, at the site
-URL you configure. Nothing else, and no telemetry.
+URL you configure, or at `api.atlassian.com` for a scoped token (see below).
+Nothing else, and no telemetry.
 
 ### Credentials
 
 `~/.dbhq/atlassian/config.json`, mode 600, holding `site`, `email`, an API
-token and whether the account has Confluence access. It is written outside
+token, whether the account has Confluence access, and where requests go. It is written outside
 any repository. Setup verifies the credential against `/rest/api/3/myself`
 before writing anything, so a wrong token costs you nothing, then checks
 Confluence access too - a warning, not a blocker, since a token can be valid
@@ -69,12 +70,61 @@ else.
 
 ### Scope of the token
 
-The API token you give it is a full-account token - Atlassian does not offer
-a scoped one for this API. It can therefore see, create and update whatever
-your Jira and Confluence account can, on both products, since one token
-authenticates both. The skill limits itself to create, read and update; the
-credential does not. Give it an account whose access you are comfortable
-with.
+Setup takes either kind of Atlassian API token, and works out which it was
+given.
+
+**A classic API token** (Create API token) can do anything your account can
+do, on Jira and Confluence alike, since one token authenticates both. It
+calls your site URL. The skill limits itself to create, read and update; the
+credential does not.
+
+**A scoped API token** (Create API token with scopes) can do only what its
+scopes allow. It must call Atlassian's gateway,
+`https://api.atlassian.com/ex/jira/<cloud id>` and
+`https://api.atlassian.com/ex/confluence/<cloud id>`, not the site. Setup
+reads the cloud id from `<site>/_edge/tenant_info`, which needs no
+credential. It tries the token on the site, and on a 401 tries the gateway.
+It records a base URL per product, and every request goes there. See
+[Manage API tokens](https://support.atlassian.com/atlassian-account/docs/manage-api-tokens-for-your-atlassian-account/).
+
+**A scoped token with no delete scope is the only way to make "never
+deletes" hold at the credential**, not only in the scripts. Use granular
+scopes. The classic `write:jira-work` scope includes deleting issues, and
+Atlassian's API reference gates Confluence v1 deletes, including deleting a
+page tree, behind the classic `write:confluence-content`. So neither
+belongs on a token for this skill.
+
+The granular scopes the skill needs, taken from the "OAuth 2.0 scopes
+required" of every endpoint it calls (read 25 September 2026):
+
+- **Jira**: `read:application-role:jira`, `read:avatar:jira`,
+  `read:comment:jira`, `read:comment.property:jira`, `read:field:jira`,
+  `read:field-configuration:jira`, `read:field.default-value:jira`,
+  `read:field.option:jira`, `read:group:jira`, `read:issue:jira`,
+  `read:issue-details:jira`, `read:issue-meta:jira`,
+  `read:issue-security-level:jira`, `read:issue-type:jira`,
+  `read:issue-type-hierarchy:jira`, `read:issue.changelog:jira`,
+  `read:issue.vote:jira`, `read:priority:jira`, `read:project:jira`,
+  `read:project-category:jira`, `read:project-role:jira`,
+  `read:project-version:jira`, `read:project.component:jira`,
+  `read:project.property:jira`, `read:status:jira`, `read:user:jira`,
+  `write:attachment:jira`, `write:comment:jira`,
+  `write:comment.property:jira` and `write:issue:jira`.
+- **Confluence**: `read:space:confluence`, `read:page:confluence`,
+  `write:page:confluence`, `read:attachment:confluence`,
+  `read:content-details:confluence` and `write:attachment:confluence`.
+
+None of them is a `delete:` scope. A scope cannot be added to a token after
+it is made, so a missing one means a new token.
+
+Two limits. Neither has been checked against a live site yet:
+
+- **A scoped token may cover one app only.** Atlassian's steps for making
+  one say to select the app. Setup needs Jira access, so a scoped Jira
+  token gives you Jira, and setup reports Confluence as unavailable if the
+  token has no Confluence scopes.
+- **Every API token expires**, after at most one year. A 401 from any
+  command says so.
 
 ## Third-party code
 
