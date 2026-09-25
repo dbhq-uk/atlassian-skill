@@ -2511,6 +2511,87 @@ def check_roundtrip(doc):
     return False, problem[0]
 
 
+# --- measuring the gate on a set of real pages ---
+
+def _types_in(node, found=None):
+    """Every ADF node and mark type in node, reached through content and
+    marks only, as a set."""
+    found = set() if found is None else found
+    if isinstance(node, dict):
+        if isinstance(node.get("type"), str):
+            found.add(node["type"])
+        for key in ("content", "marks"):
+            _types_in(node.get(key), found)
+    elif isinstance(node, list):
+        for item in node:
+            _types_in(item, found)
+    return found
+
+
+def audit_report(pages):
+    """The round-trip gate's result over a set of pages, as text.
+
+    pages is a list of dicts. A page that was read has "id", "title" and
+    "adf" (the ADF document, or the JSON string the API returns). A page
+    that could not be read has "id" and "status" (the HTTP status).
+
+    Reports how many pages pass, and for every node and mark type found,
+    how many pages hold it and how many of those pass. Then lists each
+    refused page with the type nearest the difference. Never page content.
+    """
+    passed, refused, unread = 0, [], []
+    holding, passing = {}, {}
+    for page in pages:
+        if "adf" not in page:
+            unread.append(page)
+            continue
+        try:
+            adf = page["adf"]
+            doc = json.loads(adf) if isinstance(adf, str) else adf
+            problem = roundtrip_problem(doc)
+            types = _types_in(doc)
+        except Exception as exc:
+            problem, types = ("document", f"{type(exc).__name__}: {exc}"), set()
+        types.discard("doc")
+        for t in types:
+            holding[t] = holding.get(t, 0) + 1
+        if problem is None:
+            passed += 1
+            for t in types:
+                passing[t] = passing.get(t, 0) + 1
+        else:
+            refused.append((page, problem))
+
+    audited = passed + len(refused)
+    lines = [f"Round-trip gate audit: {len(pages)} page(s). Read only - nothing was written.", ""]
+    if audited:
+        lines.append(f"  Pass       {passed} of {audited} ({round(100 * passed / audited)}%)")
+    else:
+        lines.append("  Pass       0 of 0")
+    lines.append(f"  Refused    {len(refused)}")
+    if unread:
+        statuses = ", ".join(sorted({str(p.get("status", "?")) for p in unread}))
+        lines.append(f"  Not read   {len(unread)} (HTTP {statuses})")
+    if holding:
+        width = max(len("TYPE"), *(len(t) for t in holding))
+        lines += ["", "Pass rate by node type (pages holding the type, and how many of them pass):",
+                  f"  {'TYPE'.ljust(width)}  PAGES  PASS  RATE"]
+        for t in sorted(holding, key=lambda t: (passing.get(t, 0) / holding[t], t)):
+            n, ok = holding[t], passing.get(t, 0)
+            lines.append(f"  {t.ljust(width)}  {n:5d}  {ok:4d}  {round(100 * ok / n):3d}%")
+    if refused:
+        lines += ["", "Refused (page id, the node nearest the difference, title):"]
+        for page, (node_type, detail) in refused:
+            lines.append(f"  {page.get('id', '?')}  {node_type}  {page.get('title', '')}")
+            if detail:
+                lines.append(f"      {detail}")
+    if unread:
+        lines += ["", "Not read (page id, HTTP status):"]
+        for page in unread:
+            lines.append(f"  {page.get('id', '?')}  {page.get('status', '?')}")
+    return "\n".join(lines) + "\n"
+
+
 def _roundtrip_cause(node_type, detail):
     """One line saying why a page fails the round-trip gate."""
     if detail:
@@ -2524,7 +2605,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "command",
-        choices=["to-adf", "to-adf-jira", "to-html", "to-markdown", "check-roundtrip"],
+        choices=["to-adf", "to-adf-jira", "to-html", "to-markdown", "check-roundtrip",
+                 "audit"],
     )
     args = parser.parse_args(argv)
     try:
@@ -2563,6 +2645,11 @@ def main(argv=None):
                     f"the page body could not be read as markdown "
                     f"({type(exc).__name__}: {exc})."
                 )
+        elif args.command == "audit":
+            # One JSON object per line on stdin, as confluence-pages.sh
+            # audit writes them. See audit_report.
+            pages = [json.loads(line) for line in sys.stdin if line.strip()]
+            sys.stdout.write(audit_report(pages))
         elif args.command == "check-roundtrip":
             # Reads the page's current ADF (exactly what the API returned)
             # on stdin. Silent on success, so confluence-pages.sh's update

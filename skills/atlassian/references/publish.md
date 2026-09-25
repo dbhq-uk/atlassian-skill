@@ -2,9 +2,7 @@
 
 Turns a markdown file in a repository into a Confluence page, and keeps it that way. The file is the master; Confluence is the rendering.
 
-Publishing **creates and updates only**. There is no delete verb anywhere - not for a page, not for an attachment. Removing something is a human job in the Confluence UI.
-
-Credentials and setup are in `SKILL.md`. The rules there apply here too.
+Credentials, setup and the rules are in `SKILL.md`.
 
 ## The binding
 
@@ -88,12 +86,7 @@ A fenced code block's language token is passed straight into a CSS class name (`
 
 **A relative link to another file - `[guide](guide.md#heading)` - is refused, not published pointing nowhere.** This converter reads one file at a time; it has no way to know whether `guide.md` has even been published yet, let alone at what Confluence URL. Link that page's absolute Confluence URL once it exists, or point at an absolute external URL. An in-page anchor (`[above](#section)`) and a `mailto:` link both still work - neither is a path to another file.
 
-**Read these two files first. Every time.** They are the difference between a page that uses the platform and a page that is a wall of bold text:
-
-1. `${CLAUDE_SKILL_DIR}/references/house-style.md` - the conventions, and when to reach for a raw HTML+ pattern instead of plain markdown
-2. `${CLAUDE_SKILL_DIR}/references/html-patterns.md` - every HTML+ pattern markdown has no syntax for
-
-And if it exists, read `~/.dbhq/atlassian/house-style.md` too. That is the user's own tone and conventions, and it wins over anything in the shipped reference.
+Before you write the file, read `${CLAUDE_SKILL_DIR}/references/house-style.md` (when to reach for raw HTML+ instead of plain markdown) and `${CLAUDE_SKILL_DIR}/references/html-patterns.md` (every pattern markdown has no syntax for), then `~/.dbhq/atlassian/house-style.md` if it exists. The user's file wins.
 
 **Nested markdown lists are refused, not mangled.** `- one` with `  - nested` indented under it stops the conversion outright, naming the line, rather than silently splitting into two lists with the marker left as stray text:
 
@@ -134,11 +127,3 @@ It prints the media id and the collection, tab separated. Put both into a figure
 ## The banner
 
 Every published page gets an info panel naming the source file, saying a direct Confluence edit is lost at the next publish, and pointing readers at page comments. It is added automatically and is not optional: a warning without a route just tells people their feedback has nowhere to go, so somebody has to actually read those comments back into the source.
-
-## Constraints
-
-- **No delete.** Removing a page or an attachment is a human job in the UI.
-- **Dry-run before a first publish**, always.
-- **Commit the written-back `page_id`** or the next run creates a duplicate.
-- **Never invent an opaque id.**
-- **No `--force`.** A page edited in Confluence since the last publish is refused until that edit is in the file and `--base-version` confirms it - see [§ Updating an existing page](#updating-an-existing-page).

@@ -1,10 +1,6 @@
 # Jira issue creation and lookup
 
-Create and read Jira Cloud issues through the REST v3 API, authenticated with an API token.
-
-The Jira commands **create and read only**. There is no delete, no bulk transition and no project administration. Anything destructive is done by a human in the Jira UI.
-
-Credentials and setup are in `SKILL.md`. The rules there apply here too.
+Create and read Jira Cloud issues through the REST v3 API. Credentials, setup and the rules are in `SKILL.md`.
 
 ## Look before you create
 
@@ -67,14 +63,7 @@ ${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh create PAY Task "Confirm the egress a
 
 `[description]` and `--description-file` are mutually exclusive - pass one or the other, never both. `bulk` has no `--description-file` equivalent; every description in a bulk file is plain text.
 
-**Read these two files first. Every time.** They are the difference between a description that uses the platform and one that is a wall of bold text:
-
-1. `${CLAUDE_SKILL_DIR}/references/house-style.md` - the conventions
-2. `${CLAUDE_SKILL_DIR}/references/html-patterns.md` - the HTML+ patterns
-
-And if it exists, read `~/.dbhq/atlassian/house-style.md` too. That is the user's own tone and conventions, and it wins over anything in the shipped reference.
-
-Work through `${CLAUDE_SKILL_DIR}/references/checklist.md` against the body before you send it. Both reference files are written primarily for a Confluence page - skip the sections with no Jira equivalent (page titles, cross-page smart links) and read the rest as it applies to an issue description.
+Before you write the body, read `${CLAUDE_SKILL_DIR}/references/house-style.md` and `${CLAUDE_SKILL_DIR}/references/html-patterns.md`, then `~/.dbhq/atlassian/house-style.md` if it exists. The user's file wins. Both references are written for a Confluence page, so skip what has no Jira equivalent, such as page titles and cross-page smart links. Work through `${CLAUDE_SKILL_DIR}/references/checklist.md` against the body before you send it.
 
 **Jira's ADF profile is narrower than Confluence's, and `--description-file` refuses what is not on it.** The profile is [Atlassian's list of the nodes and marks Jira supports](https://developer.atlassian.com/cloud/jira/platform/apis/document/structure/). A decision list, a multi-column layout, a block or embed card and a Confluence macro are not on it. Jira may accept a description containing one and then show nothing where it should be, which looks like it worked. `--description-file` refuses these before anything is sent, naming the node:
 
@@ -102,8 +91,6 @@ The shape of an issue:
 
 Drop a heading that has nothing to say. Do not write a heading and then repeat the summary under it.
 
-Four rules carry most of the value: a sentence has a maximum of 25 words, the active voice names the actor, one term means one thing through the whole issue, and a technical name never changes to obey a rule.
-
 ## Reading
 
 ```bash
@@ -117,15 +104,6 @@ ${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh mine [max]
 `search` posts to `/rest/api/3/search/jql`. The old `GET /rest/api/3/search` is deprecated and is not used here.
 
 `search` fetches one page only, up to `max` (default 25). It is not silent about that: if the response carries a `nextPageToken`, or the page is exactly full, it says more results may exist and to raise `max` or narrow the JQL, rather than let a truncated result set look complete.
-
-## Rules
-
-1. **Never invent a project key, an issue type, or a field name.** Read it with `jira-meta.sh` first.
-2. **Confirm the summary and description with the user before creating.** A Jira issue is visible to the whole team the moment it exists, and this skill cannot delete one.
-3. **Two or more issues means `bulk` with `--dry-run` first**, reviewed, then the real run.
-4. Do not put credentials, tokens, account numbers, or personal data into an issue description. A Jira issue is not a secret store, and in a regulated environment it is disclosable.
-5. On failure, read the `Cause:` and `Fix:` lines the scripts print. They carry Jira's own error text.
-6. **Write the summary and the description in Simplified Technical English** - see [§ Writing the issue text](#writing-the-issue-text) and [ste.md](ste.md).
 
 ## Limits
 

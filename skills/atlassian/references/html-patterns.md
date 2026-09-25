@@ -309,9 +309,7 @@ for a layout section stretched wide.
 
 Use the real language class so it highlights, or write `language-plaintext`
 for a bare route or a shell line where you want to say so explicitly. Leaving
-the class off entirely is also fine and is what a fetched page's own
-unlabelled code blocks actually look like - this converter no longer invents
-`plaintext` where the source had no language at all.
+the class off is also fine; a fetched page's unlabelled code blocks have none.
 
 `<pre>` also takes `data-local-id` (round-trip bookkeeping, as elsewhere) and,
 on a page fetched back from Confluence, `data-breakout-mode`

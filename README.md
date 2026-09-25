@@ -200,14 +200,6 @@ Confluence since the last publish.
 silently drop whatever does not survive the round trip, not only the part you
 meant to change.
 
-**A live-site measurement once found this refusing roughly 60% of a 289-page
-sample** - almost always an ordinary
-node's own attribute or mark (a local id, a colspanned cell's per-column
-widths, a list's start number, the editor's "make this wide" toggle) rather
-than an exotic node type. Generalising the carry-through-or-opaque-passthrough
-rule that already covered media to every named node type closed that gap,
-and the same measurement now passes cleanly.
-
 This is a separate guard from `--base-version`, which `update` also always
 requires: `--base-version` refuses a write if the page has moved on since
 the version you read, an optimistic-concurrency check unrelated to whether
@@ -237,6 +229,28 @@ Two things soften this rather than hide it:
 - **`edit` narrows the gate to one block.** It converts only your fragment
   and splices it into the live page by local id, so the rest of the page -
   whatever it holds - never goes through the converter.
+
+### How often it refuses
+
+These figures were measured on one site, and yours may differ.
+
+| Measured | Pages | Refused | Converter at the time |
+|---|---|---|---|
+| 18 September 2026 | 289 | roughly 60% | before every node type carried its own attributes and marks through |
+| 18 September 2026 | 60, then 80 different pages | none | after that change |
+
+Most refusals in the first sample came from an ordinary node's own attribute
+or mark (a local id, a colspanned cell's per-column widths, a list's start
+number, the editor's "make this wide" toggle), not an exotic node type. The
+converter has changed since, and neither sample has been measured again.
+
+Measure your own site with the read-only audit. It runs the gate over the
+pages a CQL query finds and reports how many pass, by node type, and which
+pages it would refuse. It writes nothing. From the skill's `scripts` folder:
+
+```bash
+./confluence-pages.sh audit --cql 'space = DOCS and type = page' --limit 100
+```
 
 ## Use
 
@@ -318,6 +332,7 @@ cd ~/.claude/skills/atlassian/scripts
     --replace 5f1c2a9e --body-file /tmp/fragment.html --dry-run
 ./confluence-pages.sh update 1234567 --body-file /tmp/current.html \
     --base-version 14 --message "Added the egress address"
+./confluence-pages.sh audit --cql 'space = DOCS' --limit 100    # read only: how often update would refuse
 ```
 
 `edit` changes one block and leaves the rest of the page alone. It converts

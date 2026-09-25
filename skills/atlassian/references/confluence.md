@@ -1,21 +1,10 @@
 # Confluence pages
 
-Search, read, create and update Confluence Cloud pages through the v2 REST API, authenticated with an API token. No MCP server.
-
-The Confluence commands **read, create and update**. There is no delete, no space administration and no permission change. Deleting a page is a human job in the Confluence UI.
-
-Credentials and setup are in `SKILL.md`. The rules there apply here too.
+Search, read, create and update Confluence Cloud pages through the v2 REST API. Credentials, setup and the rules are in `SKILL.md`.
 
 ## Before you write anything
 
-**Read these two files first. Every time.** They are the difference between a page that uses the platform and a page that is a wall of bold text:
-
-1. `${CLAUDE_SKILL_DIR}/references/house-style.md` - the conventions
-2. `${CLAUDE_SKILL_DIR}/references/html-patterns.md` - the HTML+ patterns
-
-And if it exists, read `~/.dbhq/atlassian/house-style.md` too. That is the user's own tone, column widths and site conventions, and it wins over anything in the shipped reference.
-
-Work through `${CLAUDE_SKILL_DIR}/references/checklist.md` against the body before you send it.
+Read `${CLAUDE_SKILL_DIR}/references/house-style.md` and `${CLAUDE_SKILL_DIR}/references/html-patterns.md` every time, then `~/.dbhq/atlassian/house-style.md` if it exists. The user's file wins. Work through `${CLAUDE_SKILL_DIR}/references/checklist.md` against the body before you send it.
 
 ## Finding a page
 
@@ -133,9 +122,17 @@ Fix: nothing was sent. This page carries something this converter cannot round-t
 
 This means the page has a node type, or an attribute on one, that this converter cannot carry through unchanged - writing would silently alter part of the page your edit never touched, not just the part you meant to change. **Re-reading will not fix this, and there is no bypass and no `--force`.** If your change is to one block, use `edit` - it only checks that block. Otherwise make the change in the Confluence UI.
 
-**This used to refuse often - a live-site measurement once found it on roughly half of real pages.** The cause was never an exotic node type: paragraphs, headings, tables, ordered lists, layout sections and code blocks are ordinary, and it was their own attributes and marks - a local id, a colspanned cell's per-column widths, a list's start number, the editor's "make this wide" toggle - that this converter dropped rather than carried through. Generalising the same carry-through-or-opaque-passthrough rule that already covered media to every named node type closed that gap: the same measurement now passes cleanly. What still refuses is narrower - a node type or an attribute this converter has never modelled at all reaching this converter's own opaque-passthrough ceiling, or the column-width consistency check firing on a table a person actually left inconsistent. That is still expected on a page with editing history outside this skill, not a sign anything is broken.
+To see how often this refuses on the user's site, run `audit` (below). It reads, and writes nothing.
 
 **Never invent an opaque id.** `data-id` and `data-collection` on a media node come from a fetch or from an upload step's output. A made-up one produces a broken node on a live page. An inline comment anchor - Confluence's annotation mark - and anything else this converter has no named HTML+ for arrive as `adf-opaque`/`adf-opaque-mark` (see `html-patterns.md`); copy that element through unchanged rather than inventing one.
+
+## Measuring the gate
+
+```bash
+${CLAUDE_SKILL_DIR}/scripts/confluence-pages.sh audit --cql 'space = DOCS and type = page' --limit 100
+```
+
+`audit` runs the round-trip gate over the pages a CQL query finds, up to `--limit` (default 25). It reports how many pages would pass, the pass rate for each node type, and each page it would refuse, with the node nearest the difference. It only reads. Use it to find out whether `update` or `edit` suits the pages in a space.
 
 ## What the converter does for you
 
@@ -150,12 +147,3 @@ that is the converter, not the server. Nothing was sent. Fix the body and retry.
 The nesting rules are Atlassian's own published ADF schema, which ships with the skill. An attribute an element does not take - a misspelt `data-colour`, say - is refused by name rather than dropped.
 
 It also rejects a `data-colwidth` that is not a plain number, and a column where some cells carry the attribute and others do not - Confluence silently resets that whole table to even columns, which reads as a formatting regression to everyone who sees the diff.
-
-## Constraints
-
-- **No delete.** Not for a page, not for a space, not for an attachment.
-- **`update` and `edit` always need `--base-version`.** Read the page, take the version from its header, and pass it - see [§ Updating a page](#updating-a-page).
-- **Change one block with `edit`, not `update`.** It leaves the rest of the page untouched - see [§ Editing one block](#editing-one-block).
-- **HTML+ in, never markdown and never storage format.** Markdown flattens panels, lozenges, tasks and column widths into bold text.
-- **Never invent an opaque id.**
-- **A page id is numeric.** Anything else is refused before a request is built.

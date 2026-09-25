@@ -55,10 +55,9 @@ patch - there is no partial edit on the API this skill sits on. Two guards
 sit in front of every write: `--base-version` refuses to write if the page
 has moved on since the version the caller read, and a round-trip gate
 refuses to overwrite a page whose current content this repository's
-converter cannot read back unchanged - a live-site measurement once put
-this at roughly 60% of a 289-page sample, before this converter generalised
-its attribute and mark carry-through to every named node type; the same
-measurement now passes cleanly. Neither guard has a bypass - there is no
+converter cannot read back unchanged. How often it refuses is in the
+README, and `confluence-pages.sh audit` measures it on your own site
+without writing anything. Neither guard has a bypass - there is no
 `--force` anywhere in this skill. A refusal needs a human decision in
 the Confluence UI, not a flag.
 
