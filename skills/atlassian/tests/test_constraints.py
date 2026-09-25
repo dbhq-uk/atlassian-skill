@@ -1357,5 +1357,40 @@ class TestTokenTempFileCleanupOnSignal(unittest.TestCase):
             )
 
 
+class TestTheDocsMatchTheCode(unittest.TestCase):
+    """Small claims in the public docs that had drifted from the code."""
+
+    def test_the_manifest_does_not_call_an_updating_skill_read_only(self):
+        import json
+        manifest = json.loads((REPO / ".claude-plugin" / "plugin.json").read_text())
+        description = manifest["description"].lower()
+        self.assertIn("update", description)
+        self.assertNotIn("read only", description)
+        self.assertNotIn("create and read only", description)
+
+    def test_security_names_every_v1_endpoint_the_scripts_call(self):
+        scripts = REPO / "skills" / "atlassian" / "scripts"
+        called = set()
+        for script in scripts.glob("*.sh"):
+            text = script.read_text(encoding="utf-8")
+            if "/wiki/rest/api/search" in text:
+                called.add("CQL search")
+            if "/child/attachment" in text:
+                called.add("attachment upload")
+        self.assertEqual(called, {"CQL search", "attachment upload"})
+        security = " ".join((REPO / "SECURITY.md").read_text(encoding="utf-8").split())
+        for name in called:
+            self.assertIn(name, security)
+        self.assertNotIn("the one place", security)
+
+    def test_the_readme_lists_each_sibling_skill_once(self):
+        readme = (REPO / "README.md").read_text(encoding="utf-8")
+        section = readme.split("## Also from DBHQ", 1)[1].split("\n## ", 1)[0]
+        links = re.findall(r"\(https://skills\.dbhq\.uk/([a-z]+)/\)", section)
+        self.assertTrue(links)
+        repeated = sorted({name for name in links if links.count(name) > 1})
+        self.assertEqual(repeated, [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -234,6 +234,54 @@ class TestReadMarkdown(_Harness):
         self.assertIn("ask @Sam please", result.stdout)
 
 
+class TestApiFail(unittest.TestCase):
+    """_common.sh's api_fail words its advice for the product the failed
+    call went to, and reads each product's error shape."""
+
+    def fail_with(self, path, status, body):
+        home = tempfile.mkdtemp()
+        script = (f'. "{SKILL}/scripts/_common.sh"; API_PATH="$1"; '
+                  f'API_STATUS="$2"; api_fail "$3" "the call"')
+        return subprocess.run(["bash", "-c", script, "bash", path, status, body],
+                              capture_output=True, text=True,
+                              env={"HOME": home, "PATH": os.environ["PATH"]})
+
+    V2_404 = json.dumps({"errors": [{"status": 404, "code": "NOT_FOUND",
+                                     "title": "Not Found", "detail": None}]})
+
+    def test_a_confluence_404_gives_confluence_advice(self):
+        result = self.fail_with("/wiki/api/v2/pages/1234567", "404", self.V2_404)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Fix: check the page id or space id", result.stderr)
+        self.assertNotIn("project key", result.stderr)
+
+    def test_a_confluence_v2_error_list_is_read_not_printed_as_json(self):
+        result = self.fail_with("/wiki/api/v2/pages/1234567", "404", self.V2_404)
+        self.assertIn("Cause: Not Found", result.stderr)
+        self.assertNotIn("0: {", result.stderr)
+
+    def test_a_confluence_v1_message_is_read(self):
+        body = json.dumps({"statusCode": 400, "message": "Could not parse cql"})
+        result = self.fail_with("/wiki/rest/api/search?cql=x", "400", body)
+        self.assertIn("Cause: Could not parse cql", result.stderr)
+
+    def test_a_confluence_403_and_429_are_about_confluence(self):
+        result = self.fail_with("/wiki/api/v2/pages/1", "403", "{}")
+        self.assertIn("space or page", result.stderr)
+        result = self.fail_with("/wiki/api/v2/pages/1", "429", "{}")
+        self.assertIn("/cloud/confluence/rate-limiting/", result.stderr)
+
+    def test_a_jira_404_keeps_its_jira_advice_and_error_shape(self):
+        body = json.dumps({"errorMessages": ["Issue does not exist"],
+                           "errors": {"summary": "Field is required"}})
+        result = self.fail_with("/rest/api/3/issue/PAY-12", "404", body)
+        self.assertIn("Cause: Issue does not exist; summary: Field is required",
+                      result.stderr)
+        self.assertIn("project key or issue key", result.stderr)
+        result = self.fail_with("/rest/api/3/issue/PAY-12", "429", "{}")
+        self.assertIn("/cloud/jira/platform/rate-limiting/", result.stderr)
+
+
 class TestSpliceRules(unittest.TestCase):
     """adf_edit.splice's refusals, called directly."""
 
