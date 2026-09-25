@@ -574,6 +574,40 @@ class TestUnknownAttributesAreRefused(unittest.TestCase):
         self.assertEqual(html_to_adf(adf_to_html(doc)), doc)
 
 
+class TestExternalImage(unittest.TestCase):
+    """An image at a URL - what markdown's ![alt](https://...) becomes."""
+
+    FIGURE = ('<figure data-type="media-single" data-layout="center">'
+              '<div data-type="media" data-media-type="external" '
+              'data-url="https://example.com/a.png" data-alt="A"></div></figure>')
+
+    def test_it_converts_to_external_media(self):
+        media = html_to_adf(self.FIGURE)["content"][0]["content"][0]
+        self.assertEqual(media["attrs"], {"type": "external",
+                                          "url": "https://example.com/a.png",
+                                          "alt": "A"})
+
+    def test_it_round_trips_named_not_opaque(self):
+        doc = html_to_adf(self.FIGURE)
+        self.assertEqual(adf_to_html(doc), self.FIGURE)
+        self.assertEqual(check_roundtrip(doc), (True, None))
+
+    def test_a_relative_url_is_refused(self):
+        with self.assertRaises(ConversionError) as cm:
+            html_to_adf(self.FIGURE.replace("https://example.com/a.png", "a.png"))
+        self.assertIn("data-url", str(cm.exception))
+
+    def test_a_file_media_node_cannot_also_carry_a_url(self):
+        with self.assertRaises(ConversionError):
+            html_to_adf('<figure data-type="media-single"><div data-type="media" '
+                        'data-id="x" data-collection="c" data-url="https://e.com/a"></div>'
+                        '</figure>')
+
+    def test_a_code_block_may_hold_three_backticks(self):
+        doc = html_to_adf("<pre><code>```\nx\n```</code></pre>")
+        self.assertEqual(doc["content"][0]["content"][0]["text"], "```\nx\n```")
+
+
 class TestNesting(unittest.TestCase):
     """One case per row of the nesting table in references/html-patterns.md.
 
@@ -1581,10 +1615,11 @@ class TestMedia(unittest.TestCase):
     def test_a_non_file_media_node_falls_back_to_opaque_not_a_crash(self):
         # A live-site measurement found the other real media shape:
         # type "external" (a bare url, no id or collection - pasting an
-        # external image address rather than uploading a file). Named
-        # rendering requires id and collection, so this must fall back to
-        # the same opaque passthrough an unrecognised node type gets,
-        # rather than a KeyError on a["id"].
+        # external image address rather than uploading a file). It must
+        # never be a KeyError on a["id"]. Inside a figure it now has a
+        # named form (TestExternalImage); here, straight under the
+        # document where the schema has no room for a media node, it goes
+        # opaque by position and still reads back unchanged.
         doc = {
             "type": "doc", "version": 1,
             "content": [
@@ -1616,16 +1651,18 @@ class TestMedia(unittest.TestCase):
 
     def test_a_figure_around_an_unrenderable_media_still_round_trips(self):
         # The composite of the two cases above: a mediaSingle (always safe
-        # to render named) wrapping a media node that is not
-        # (the external case). The figure renders named; the media inside
-        # it renders opaque; the whole thing still reads back unchanged.
+        # to render named) wrapping a media node that is not. That used to
+        # be the external case; external images have a named form now, so
+        # this uses a "link" media node, which still has none. The figure
+        # renders named; the media inside it renders opaque; the whole
+        # thing still reads back unchanged.
         doc = {
             "type": "doc", "version": 1,
             "content": [
                 {"type": "mediaSingle", "attrs": {"layout": "center"},
                  "content": [
                      {"type": "media", "attrs": {
-                         "type": "external", "url": "https://example.com/x.png"}},
+                         "type": "link", "id": "abc-123", "collection": "c"}},
                  ]},
             ],
         }

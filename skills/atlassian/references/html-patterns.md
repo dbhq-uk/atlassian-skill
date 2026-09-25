@@ -353,6 +353,19 @@ The inner `<div>` also carries the image's own pixel `data-width`/
 Both are round-trip bookkeeping, not something to invent when hand-authoring
 a new figure - leave them off and Confluence assigns its own.
 
+An image served from its own web address, rather than attached to the page,
+is an external media node - what a markdown `![alt](https://...)` becomes:
+
+```html
+<figure data-type="media-single" data-layout="center">
+  <div data-type="media" data-media-type="external"
+       data-url="https://example.com/diagram.png" data-alt="diagram.png"></div>
+</figure>
+```
+
+It takes `data-url` (an absolute `http` or `https` address) in place of
+`data-id` and `data-collection`, never both.
+
 A PDF or zip is a media node, not an `<a href>`; a relative href does not
 become an attachment chip.
 

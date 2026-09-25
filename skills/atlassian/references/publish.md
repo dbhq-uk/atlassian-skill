@@ -52,7 +52,21 @@ If the converter refused the round trip, there is no --force: resolve it directl
 
 ## What markdown can and cannot express
 
-Headings, paragraphs, lists, tables, links, inline marks and fenced code blocks convert cleanly. **GFM task lists (`- [ ]`) become real Confluence task lists**, which Confluence indexes and reports on.
+These convert:
+
+- Headings, `#` or underlined with `===` / `---`
+- Paragraphs, with a hard line break from two trailing spaces or a trailing backslash
+- Bullet lists (`-`, `*`, `+`), and numbered lists, which keep their start number (`3.` starts at 3)
+- **GFM task lists (`- [ ]`), which become real Confluence task lists** that Confluence indexes and reports on
+- Tables
+- Blockquotes (`>`), holding paragraphs, lists or code
+- Fenced code blocks, with ```` ``` ```` or `~~~`, and their language
+- A thematic break (`---`, `***` or `___` on a line of its own)
+- Links, `<https://...>` autolinks and `<name@example.com>`
+- `**bold**`, `__bold__`, `*italic*`, `_italic_`, `~~strike~~` and `` `code` ``, with backslash escapes (`\*`)
+- An image at an absolute URL, `![alt](https://...)`, on a line of its own
+
+Everything else is refused by name rather than published as literal markdown: a relative image, an image inside a sentence, a nested list, a reference-style link or footnote, and an indented code block. A heading or a nested quote inside a blockquote is refused by the HTML+ converter, which knows what a blockquote may hold.
 
 A panel, a status lozenge, a decision list, a layout and a column width have **no markdown syntax at all**. Write them as raw HTML+ on its own line in the source file, which markdown permits and this skill passes through untouched:
 
@@ -87,7 +101,9 @@ Nothing was sent - this fires while converting, before the dry-run report or the
 
 ## Images
 
-An image must be a page attachment before it can appear on the page - conversion does not upload files, and a local path will not resolve. `publish.sh` does not do this step for you; upload separately and reference the result in the source file.
+An image at an absolute URL, `![alt](https://example.com/diagram.png)` on a line of its own, becomes a figure showing that image. Confluence fetches it from that address, so it must stay reachable.
+
+A local image must be a page attachment before it can appear on the page - conversion does not upload files, and a local path will not resolve, so `![alt](diagrams/context.png)` is refused. `publish.sh` does not do this step for you; upload separately and reference the result in the source file.
 
 ```bash
 ${CLAUDE_SKILL_DIR}/scripts/attachments.sh upload 8901234 diagrams/context.png
