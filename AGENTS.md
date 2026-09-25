@@ -103,28 +103,26 @@ there is no `--force`.** Before `confluence-pages.sh update` sends anything, it
 converts the page's current live content back through the converter and
 checks the result matches (Python value equality on the ADF, not a byte- or
 string-identical comparison - `1800.0 == 1800` is equal, and correctly so).
+If it does not - typically because a
+human edited the page directly in the Confluence editor and wrote something
+this converter has no HTML+ form for - the write is refused, because sending
+it would silently drop whatever does not survive the round trip, not only the
+part the caller meant to change. That is expected behaviour on a page with
+editing history outside this pipeline, not a sign anything is broken, and it
+is not a bug to route around: there is no `--force` anywhere in this skill,
+on either script.
+
 Both documents go through `htmlplus.normalise` first: an empty `attrs`,
 `content` or `marks` equals a missing one, and adjacent text nodes with the
 same marks equal one merged node. Those differences carry nothing. Do not
 widen `normalise` to anything that does, and never let it walk into `attrs`,
 which is data.
-If it does not - typically because a
-human edited the page directly in the Confluence editor and wrote something
-this converter has no HTML+ form for - the write is refused, because sending
-it would silently drop whatever does not survive the round trip, not only the
-part the caller meant to change. A live-site measurement across 289 real
-pages once found this refusing roughly 60% of the time - almost always an
-ordinary node's own attribute or mark (a local id, a colspanned cell's
-per-column widths, a list's start number) this converter dropped rather than
-carried through, not an exotic node type. Generalising the same
-carry-through-or-opaque-passthrough rule that already covered media to every
-named node type closed that gap, and the same measurement now passes
-cleanly; what still refuses is narrower - a node type or attribute this
-converter has never modelled at all, or a table a person left genuinely
-inconsistent. That is expected behaviour on a page with editing history
-outside this pipeline, not a sign anything is broken, and it is not a bug to
-route around: there is no `--force` anywhere in this skill, on
-either script. `confluence-pages.sh edit` narrows the gate rather than
+
+How often the gate refuses is stated once, with dates, in the README's
+round-trip gate section. Do not repeat the figures anywhere else. Anyone can
+measure their own site with `confluence-pages.sh audit`, which is read only.
+
+`confluence-pages.sh edit` narrows the gate rather than
 bypassing it: it converts only the fragment and splices it in by local id,
 so the rest of the page never goes through the converter and only the
 block being replaced has to survive the round trip. `publish.sh` does not

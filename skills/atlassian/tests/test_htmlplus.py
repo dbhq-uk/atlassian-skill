@@ -12,7 +12,7 @@ from htmlplus import ConversionError, html_to_adf  # noqa: E402
 from htmlplus import adf_to_html, adf_to_markdown  # noqa: E402
 from htmlplus import _opaque_to_html, _opaque_mark_to_html  # noqa: E402
 from htmlplus import check_roundtrip, _first_roundtrip_difference  # noqa: E402
-from htmlplus import normalise, roundtrip_problem  # noqa: E402
+from htmlplus import audit_report, normalise, roundtrip_problem  # noqa: E402
 from htmlplus import html_to_adf_for_jira, _walk  # noqa: E402
 from htmlplus import JIRA_LISTED_NODES, JIRA_INFERRED_NODES  # noqa: E402
 from htmlplus import JIRA_NODES, JIRA_MARKS, JIRA_NODE_LIST_URL  # noqa: E402
@@ -2176,6 +2176,29 @@ class TestRoundtripNormalisation(unittest.TestCase):
         self.assertEqual(r.stderr.count("\n"), 1, r.stderr)
         self.assertIn('a "table" node cannot be converted back', r.stderr)
         self.assertIn("data-colwidth is on some cells", r.stderr)
+
+
+class TestAuditReport(unittest.TestCase):
+    """audit_report, behind confluence-pages.sh audit."""
+
+    def test_a_body_that_cannot_be_read_is_a_refusal_not_a_crash(self):
+        report = audit_report([
+            {"id": "1", "title": "Fine", "adf": _doc({"type": "paragraph", "content": [_text("a")]})},
+            {"id": "2", "title": "Garbled", "adf": "not json"},
+            {"id": "3", "title": "Empty", "adf": None},
+        ])
+        self.assertIn("Pass       1 of 3 (33%)", report)
+        self.assertIn("2  document  Garbled", report)
+        self.assertIn("3  document  Empty", report)
+
+    def test_the_doc_node_is_not_counted_as_a_type(self):
+        report = audit_report([{"id": "1", "title": "T",
+                                "adf": _doc({"type": "paragraph"})}])
+        self.assertNotRegex(report, r"\n  doc\s")
+        self.assertRegex(report, r"\n  paragraph\s+1\s+1\s+100%")
+
+    def test_no_pages_is_not_a_division_by_zero(self):
+        self.assertIn("Pass       0 of 0", audit_report([]))
 
 
 class TestJiraProfile(unittest.TestCase):

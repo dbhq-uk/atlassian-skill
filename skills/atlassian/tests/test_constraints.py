@@ -1383,6 +1383,23 @@ class TestTheDocsMatchTheCode(unittest.TestCase):
             self.assertIn(name, security)
         self.assertNotIn("the one place", security)
 
+    def test_the_gate_refusal_figures_are_stated_once(self):
+        # They drifted apart when four files each kept their own copy:
+        # "roughly half", "roughly 60% of 289", and a present-tense claim in
+        # a script. The README states them, with dates. Everything else
+        # points there, or at the audit command.
+        figures = re.compile(r"\b289\b|60%|roughly half")
+        holders = sorted(
+            str(path.relative_to(REPO)) for path in TEXT_FILES
+            if path.suffix in (".md", ".sh", ".json")
+            and figures.search(path.read_text(encoding="utf-8", errors="replace"))
+        )
+        self.assertEqual(holders, ["README.md"])
+
+    def test_the_confluence_reference_documents_the_audit(self):
+        text = (REFS / "confluence.md").read_text(encoding="utf-8")
+        self.assertIn("confluence-pages.sh audit --cql", text)
+
     def test_the_readme_lists_each_sibling_skill_once(self):
         readme = (REPO / "README.md").read_text(encoding="utf-8")
         section = readme.split("## Also from DBHQ", 1)[1].split("\n## ", 1)[0]

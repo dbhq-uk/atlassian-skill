@@ -38,9 +38,18 @@ elif "/child/attachment" in url:
         "FAKE_UPLOAD",
         '{"results":[{"extensions":{"fileId":"f-new","collectionName":"contentId-1234567"}}]}')
         + "\n200")
+elif "/rest/api/search?" in url:
+    sys.stdout.write(os.environ.get("FAKE_SEARCH", '{"results":[]}') + "\n200")
 elif method == "POST":
     sys.stdout.write('{"id":"1234567","_links":{"base":"https://example.atlassian.net/wiki",'
                      '"webui":"/spaces/D/pages/1234567"}}\n200')
+elif method == "GET" and os.environ.get("FAKE_PAGES_DIR"):
+    page = os.path.join(os.environ["FAKE_PAGES_DIR"],
+                        re.search(r"/pages/(\d+)", url).group(1) + ".json")
+    if os.path.exists(page):
+        sys.stdout.write(open(page, encoding="utf-8").read() + "\n200")
+    else:
+        sys.stdout.write('{"errors":[{"status":404,"title":"Not Found"}]}\n404')
 elif method == "GET":
     sys.stdout.write(open(os.environ["FAKE_PAGE"], encoding="utf-8").read() + "\n200")
 else:
@@ -232,6 +241,68 @@ class TestReadMarkdown(_Harness):
         result = self.run_pages("read", "1234567", "--format", "markdown")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("ask @Sam please", result.stdout)
+
+
+class TestAudit(_Harness):
+    """confluence-pages.sh audit: the round-trip gate over the pages a CQL
+    query finds, reported by node type. Read only."""
+
+    def setUp(self):
+        super().setUp()
+        self.pages = self.tmp / "pages"
+        self.pages.mkdir()
+        good = {"type": "doc", "version": 1, "content": [
+            {"type": "paragraph", "attrs": {}, "content": [
+                {"type": "text", "text": "a"}, {"type": "text", "text": "b"}]}]}
+        self.add_page("101", "Clean Page", good)
+        self.add_page("102", "Wide Table", UNROUNDTRIPPABLE_ADF)
+        self.add_page("103", "Macro Page", PAGE_ADF)
+        results = [{"content": {"id": i, "type": "page"}} for i in ("101", "102", "103", "104")]
+        results.append({"content": {"id": "900", "type": "blogpost"}})
+        self.search = json.dumps({"results": results, "_links": {"next": "/rest/api/search?cursor=x"}})
+
+    def add_page(self, page_id, title, adf):
+        (self.pages / f"{page_id}.json").write_text(json.dumps({
+            "id": page_id, "title": title, "status": "current",
+            "version": {"number": 1},
+            "body": {"atlas_doc_format": {"value": _compact(adf)}}}))
+
+    def audit(self, *args):
+        return self.run_pages("audit", *args, FAKE_SEARCH=self.search,
+                              FAKE_PAGES_DIR=str(self.pages))
+
+    def test_it_reports_the_pass_rate_and_each_refusal(self):
+        result = self.audit("--cql", "space = DOCS", "--limit", "5")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        out = result.stdout
+        self.assertIn("Pass       2 of 3 (67%)", out)
+        self.assertIn("Refused    1", out)
+        self.assertIn("Not read   1 (HTTP 404)", out)
+        self.assertRegex(out, r"\n  table\s+1\s+0\s+0%")
+        self.assertRegex(out, r"\n  extension\s+1\s+1\s+100%")
+        self.assertIn("102  table  Wide Table", out)
+        self.assertIn("1 result(s) were not pages", out)
+        self.assertIn("More pages match. Raise --limit (currently 5)", out)
+
+    def test_it_only_reads(self):
+        self.audit("--cql", "space = DOCS")
+        methods = {r["method"] for r in self.requests()}
+        self.assertEqual(methods, {"GET"})
+        search = [r["url"] for r in self.requests() if "/rest/api/search?" in r["url"]]
+        self.assertEqual(len(search), 1)
+        self.assertIn("cql=space%20%3D%20DOCS", search[0])
+        self.assertIn("limit=25", search[0])
+
+    def test_a_bad_limit_is_refused_before_any_request(self):
+        result = self.audit("--cql", "space = DOCS", "--limit", "ten")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--limit must be a whole number", result.stderr)
+        self.assertEqual(self.requests(), [])
+
+    def test_it_needs_a_query(self):
+        result = self.audit()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.requests(), [])
 
 
 class TestApiFail(unittest.TestCase):

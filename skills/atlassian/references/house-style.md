@@ -186,50 +186,18 @@ of these.
 
 ## 6 · Updating a page that already exists
 
-**An update replaces the whole body.** There is no partial edit, so the
-reliable route is always fetch, splice, verify:
+`confluence.md` gives the steps: `edit` for one block, `update` for the whole
+body. Either way, never invent an opaque ID (`data-id`, `data-collection`).
+Copy it from the fetched content or from an upload step's output, and copy an
+`adf-opaque`/`adf-opaque-mark` element's `data-adf` payload through byte for
+byte.
 
-1. **Fetch the current body immediately before writing**, in the same format
-   you intend to publish. Not a copy read earlier in the session: another
-   person or job may have landed a version in between, and building on a stale
-   copy destroys their work as surely as deleting it.
-2. **Splice your change into what came back**, preserving everything you are
-   not deliberately changing: local IDs, `data-colwidth` values, inline
-   comment anchors (Confluence's annotation mark, carried as
-   `adf-opaque-mark` - see `html-patterns.md`), media IDs and collections.
-3. **Verify by re-fetching** and reading the section you changed.
-
-Never invent an opaque ID (`data-id`, `data-collection`). Copy them from the
-fetched content or from an upload step's output - and never hand-write or
-edit an `adf-opaque`/`adf-opaque-mark` element's `data-adf` payload either;
-copy it through byte for byte.
-
-### Where a page is generated from a repository
-
-If a page is published from a file under version control, the file is the
-master and Confluence is the rendering. Say so on the page, name the file
-path, and warn that a direct edit in Confluence is lost at the next publish.
-
-Then make the alternative work: **a reader who cannot edit needs somewhere to
-put a correction.** Point them at a page comment, and make sure comments are
-actually read into the source. A warning without a route just tells people
-their feedback has nowhere to go.
+A page published from a repository file says so, names the file, and points a
+reader who cannot edit at page comments. `publish.sh` adds that banner itself.
+Somebody has to read those comments back into the source.
 
 ---
 
 ## 7 · Before you publish
 
-The full checklist is in `checklist.md` beside this file. The four that catch
-the most:
-
-- Every status, warning, task and decision is a native component, not bold
-  text.
-- Every table has been sized deliberately.
-- Every cross-page link is a smart link, and it points at the canonical
-  `*.atlassian.net` URL. **A link copied out of a browser may carry a
-  corporate security proxy's rewritten host.** Those work for the person who
-  copied them and break or misroute for others. Strip the proxy host back to
-  the real one.
-- Every in-page jump uses the heading-text anchor form
-  (`<a href="#Open-items">`), not a Markdown slug (`#open-items`). Confluence
-  will not resolve the slug and the link renders dead.
+Work through `checklist.md` beside this file.

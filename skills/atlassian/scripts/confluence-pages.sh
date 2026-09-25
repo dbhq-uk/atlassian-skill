@@ -1,5 +1,6 @@
 #!/bin/bash
-# Confluence pages - read, create and update.
+# Confluence pages - read, create and update, and audit how often update's
+# round-trip gate would refuse.
 #
 # There is no delete and there will not be one. Deleting a page is a human job
 # in the Confluence UI.
@@ -31,6 +32,7 @@ Usage:
                              (--replace <local-id> | --insert-after <local-id> | --append) \
                              --body-file <fragment.html> \
                              [--message <version message>] [--dry-run]
+  confluence-pages.sh audit  --cql '<CQL query>' [--limit <n>]
 
 The body file holds a Confluence HTML+ fragment. Read
 references/html-patterns.md before writing one.
@@ -57,6 +59,10 @@ the page goes through the converter. It needs --base-version the same way.
 --dry-run on update or edit sends nothing and prints what the write would
 remove: every node whose local id would be gone, and every node with no
 named HTML+ form that would no longer be there.
+
+AUDIT IS READ ONLY. It runs update's round-trip gate over the pages a CQL
+query finds (up to --limit, default 25) and reports how many would pass, by
+node type. Use it to see how often the gate refuses on your own site.
 USAGE
     exit 1
 }
@@ -306,6 +312,54 @@ case "$CMD" in
         VALUE=$(jq -Rs . < "$AFTER")
         rm -f "$BEFORE" "$AFTER"
         put_page "$PAGE_ID" "$CURRENT_TITLE" "$MESSAGE" "$VALUE"
+        ;;
+
+    audit)
+        # Read only: a CQL search, then one GET per page. Nothing is written.
+        CQL=""; LIMIT="25"
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --cql)   [ $# -ge 2 ] || usage; CQL="$2";   shift 2 ;;
+                --limit) [ $# -ge 2 ] || usage; LIMIT="$2"; shift 2 ;;
+                *) usage ;;
+            esac
+        done
+        [ -n "$CQL" ] || usage
+        case "$LIMIT" in
+            ''|*[!0-9]*|0)
+                echo "Error: --limit must be a whole number above 0, not '$LIMIT'." >&2
+                exit 1
+                ;;
+        esac
+        require_config
+        QUERY=$(jq -rn --arg v "$CQL" '$v | @uri')
+        api GET "/wiki/rest/api/search?cql=$QUERY&limit=$LIMIT"
+        api_ok || api_fail "$API_BODY" "searching Confluence"
+        SEARCH="$API_BODY"
+        # Only pages. A blog post, a comment or an attachment has no page
+        # to update, so the gate never runs on one.
+        PAGE_IDS=$(printf '%s' "$SEARCH" | jq -r '.results[] | select(.content.type == "page") | .content.id // empty')
+        OTHERS=$(printf '%s' "$SEARCH" | jq '[.results[] | select(.content.type != "page")] | length')
+        LINES=""
+        for ID in $PAGE_IDS; do
+            case "$ID" in ''|*[!0-9]*) continue ;; esac
+            api GET "/wiki/api/v2/pages/$ID?body-format=atlas_doc_format"
+            if api_ok; then
+                LINES+=$(printf '%s' "$API_BODY" | jq -c '{id: (.id | tostring), title: (.title // ""), adf: .body.atlas_doc_format.value}')
+            else
+                LINES+=$(jq -nc --arg id "$ID" --arg s "$API_STATUS" '{id: $id, status: $s}')
+            fi
+            LINES+=$'\n'
+        done
+        printf '%s' "$LINES" | python3 "$HTMLPLUS" audit
+        if [ "$OTHERS" != "0" ]; then
+            echo
+            echo "$OTHERS result(s) were not pages (a blog post, a comment or an attachment) and were skipped."
+        fi
+        if printf '%s' "$SEARCH" | jq -e '._links.next // empty' > /dev/null 2>&1; then
+            echo
+            echo "More pages match. Raise --limit (currently $LIMIT) or narrow the query."
+        fi
         ;;
 
     *) usage ;;
