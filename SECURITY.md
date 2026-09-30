@@ -40,15 +40,12 @@ find is harder to audit, not safer, and owner-only permissions are what `gh`,
 
 ### What it can do to your Jira and Confluence
 
-**It creates, reads and updates. It never deletes.** There is no delete
-anywhere - not an issue, not a page, not an attachment, not a space - no bulk
-transition, and no project or space administration. Anything destructive
-stays a human job in the Atlassian UI.
+**It creates, reads and updates. The one delete is a comment your own account wrote.** `jira-issues.sh comment-delete` and `confluence-comments.sh delete` read the comment first and refuse unless its author is the account the token authenticates as. The Confluence one also refuses a comment with replies, because the replies would go with it. Both deletes are permanent on Atlassian's side. There is no other delete - not an issue, not a page, not an attachment, not a space - no bulk transition, and no project or space administration. Anything else destructive stays a human job in the Atlassian UI.
 
 `jira bulk` supports `--dry-run`, which prints the exact payload for every
 issue and sends nothing. A partial bulk failure leaves the created issues in
 place, because there is no rollback - a consequence of the same constraint:
-the skill cannot delete what it made.
+the skill cannot delete an issue it made.
 
 **A Confluence `update` replaces the whole page body**, not a diff or a
 patch - there is no partial edit on the API this skill sits on. Two guards
@@ -113,10 +110,13 @@ required" of every endpoint it calls (read 25 September 2026):
   `write:issue.property:jira`.
 - **Confluence**: `read:space:confluence`, `read:page:confluence`,
   `write:page:confluence`, `read:attachment:confluence`,
-  `read:content-details:confluence` and `write:attachment:confluence`.
+  `read:content-details:confluence`, `write:attachment:confluence`,
+  `read:comment:confluence` and `write:comment:confluence`.
 
 None of them is a `delete:` scope. A scope cannot be added to a token after
 it is made, so a missing one means a new token.
+
+The comment delete needs two more, `delete:comment:jira` and `delete:comment:confluence` (read from the same references on 30 September 2026). Leave them off and the token cannot delete anything at all: the two delete commands fail with an authorisation error, and everything else works. Add them only if you want the agent to delete your own comments.
 
 Two limits. Neither has been checked against a live site yet:
 

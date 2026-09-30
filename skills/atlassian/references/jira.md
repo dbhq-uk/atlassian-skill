@@ -1,6 +1,6 @@
 # Jira issue creation and lookup
 
-Create, read and comment on Jira Cloud issues, and move one issue through its workflow, through the REST v3 API. Credentials, setup and the rules are in `SKILL.md`.
+Create, read and comment on Jira Cloud issues, edit or delete your own comments, and move one issue through its workflow, through the REST v3 API. Credentials, setup and the rules are in `SKILL.md`.
 
 ## Look before you create
 
@@ -112,7 +112,17 @@ ${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh comment <ISSUE-KEY> "<text>" [--dry-r
 ${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh comment <ISSUE-KEY> --body-file /tmp/comment.html [--dry-run]
 ```
 
-Plain text works as it does for a description: a blank line starts a new paragraph. `--body-file` takes an HTML+ fragment and is held to Jira's node list, the same as `--description-file`. Write the comment in Simplified Technical English, and confirm it with the user first: the skill cannot delete a comment once it is posted. It prints a link to the new comment.
+Plain text works as it does for a description: a blank line starts a new paragraph. `--body-file` takes an HTML+ fragment and is held to Jira's node list, the same as `--description-file`. Write the comment in Simplified Technical English, and confirm it with the user first: it is visible and notified the moment it is posted. It prints a link to the new comment.
+
+`get` prints each comment's id. To change or remove a comment:
+
+```bash
+${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh comment-update <ISSUE-KEY> <COMMENT-ID> "<text>" [--dry-run]
+${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh comment-update <ISSUE-KEY> <COMMENT-ID> --body-file /tmp/comment.html [--dry-run]
+${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh comment-delete <ISSUE-KEY> <COMMENT-ID> [--dry-run]
+```
+
+Both act **only on a comment your own account wrote**, and refuse any other before sending anything. `comment-update` replaces the whole body. **`comment-delete` is permanent: Jira cannot restore the comment.** Confirm with the user and run it with `--dry-run` first, which prints the comment that would go. It is the only delete in the Jira scripts; an issue is never deleted. A scoped API token needs `delete:comment:jira` for it.
 
 ## Moving an issue
 

@@ -231,11 +231,18 @@ class TestSecurityDocDescribesScopedTokens(unittest.TestCase):
     def test_the_recommended_scopes_hold_no_delete_scope(self):
         import re
         section = self.TEXT.split("### Scope of the token", 1)[1].split("\n## ", 1)[0]
-        scopes = re.findall(r"`((?:read|write|delete|manage|search):[a-z.:-]+)`", section)
+        # The comment delete is opt-in, in its own paragraph after the list.
+        section, opt_in = section.split("The comment delete needs", 1)
+        pattern = r"`((?:read|write|delete|manage|search):[a-z.:-]+)`"
+        scopes = re.findall(pattern, section)
         self.assertIn("write:issue:jira", scopes)
         self.assertIn("write:page:confluence", scopes)
+        self.assertIn("write:comment:confluence", scopes)
         recommended = [s for s in scopes if s.endswith((":jira", ":confluence"))]
         self.assertFalse([s for s in recommended if s.startswith("delete:")], recommended)
+        opt_in = opt_in.split("\n\n", 1)[0]
+        self.assertEqual(sorted(re.findall(pattern, opt_in)),
+                         ["delete:comment:confluence", "delete:comment:jira"])
 
 
 if __name__ == "__main__":

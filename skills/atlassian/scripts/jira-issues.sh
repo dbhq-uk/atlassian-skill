@@ -1,7 +1,8 @@
 #!/bin/bash
 # Jira issues - create, read, comment on, and move one issue through its
-# workflow. There is deliberately no delete and no bulk transition here: this
-# skill cannot destroy work, and a transition moves one issue at a time.
+# workflow. The only delete is a comment the credential's own account wrote.
+# There is no issue delete and no bulk transition: a transition moves one
+# issue at a time.
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -11,7 +12,7 @@ require_config
 
 usage() {
     cat <<'EOF'
-Jira issues (create, read, comment and transition - never delete)
+Jira issues (create, read, comment and transition - never deletes an issue)
 
 Usage: jira-issues.sh <command> [args]
 
@@ -40,6 +41,11 @@ Comment and move:
   comment <ISSUE-KEY> --body-file FILE [--dry-run]
                              Add a comment. FILE is an HTML+ fragment, held
                              to Jira's node list like --description-file.
+  comment-update <ISSUE-KEY> <COMMENT-ID> <text> | --body-file FILE [--dry-run]
+                             Replace the text of a comment you wrote.
+  comment-delete <ISSUE-KEY> <COMMENT-ID> [--dry-run]
+                             Delete a comment you wrote. Jira cannot restore
+                             it. get prints every comment's id.
   transition <ISSUE-KEY> <target> [--dry-run]
                              Move one issue. <target> is a transition name,
                              the status it leads to, or its id, and must be
@@ -129,6 +135,62 @@ require_issue_key() {
         echo "Error: '$1' is not an issue key." >&2
         echo "Cause: an issue key is a project key, a hyphen and a number, such as PAY-12." >&2
         echo "Fix: pass one issue key. Find it with: jira-issues.sh search '<JQL>'" >&2
+        exit 1
+    fi
+}
+
+# comment_adf <text> <body-file> - a comment body as ADF, from plain text or
+# an HTML+ fragment held to Jira's node list. Refuses an empty one.
+comment_adf() {
+    local text="$1" file="$2" adf
+    if [ -n "$text" ] && [ -n "$file" ]; then
+        echo "Error: pass the comment as text or with --body-file, not both." >&2
+        exit 1
+    fi
+    if [ -n "$file" ]; then
+        [ -f "$file" ] || { echo "Error: $file does not exist." >&2; exit 1; }
+        adf=$(htmlplus_jira "$file")
+    elif [ -n "${text//[[:space:]]/}" ]; then
+        adf=$(text_to_adf "$text")
+    else
+        echo "Error: the comment is empty. Nothing was sent." >&2
+        exit 1
+    fi
+    if [ "$(printf '%s' "$adf" | jq '.content | length')" = "0" ]; then
+        echo "Error: the comment is empty. Nothing was sent." >&2
+        exit 1
+    fi
+    printf '%s' "$adf"
+}
+
+# require_comment_id <value> - a Jira comment id is numeric. Anything else is
+# refused before it reaches a URL.
+require_comment_id() {
+    case "$1" in
+        ''|*[!0-9]*)
+            echo "Error: '$1' is not a comment id." >&2
+            echo "Cause: a Jira comment id is a number, such as 10042." >&2
+            echo "Fix: jira-issues.sh get <ISSUE-KEY> prints each comment's id." >&2
+            exit 1
+            ;;
+    esac
+}
+
+# fetch_own_comment <key> <comment-id> <verb> - read the comment and refuse
+# unless the credential's own account wrote it. Sets COMMENT_JSON.
+fetch_own_comment() {
+    local key="$1" id="$2" verb="$3" me author
+    api GET "/rest/api/3/myself"
+    api_ok || api_fail "$API_BODY" "reading who the token authenticates as"
+    me=$(printf '%s' "$API_BODY" | jq -r '.accountId // empty')
+    api GET "/rest/api/3/issue/$key/comment/$id"
+    api_ok || api_fail "$API_BODY" "reading comment $id on $key"
+    COMMENT_JSON="$API_BODY"
+    author=$(printf '%s' "$COMMENT_JSON" | jq -r '.author.accountId // empty')
+    if [ -z "$me" ] || [ "$author" != "$me" ]; then
+        echo "Error: comment $id on $key was written by someone else." >&2
+        echo "Cause: this skill will only $verb a comment your own account wrote. Its author is $(printf '%s' "$COMMENT_JSON" | jq -r '.author.displayName // "unknown"')." >&2
+        echo "Fix: nothing was sent. Add a comment of your own instead, or ask its author." >&2
         exit 1
     fi
 }
@@ -428,7 +490,7 @@ case "${1:-}" in
         fi
         printf '%s' "$COMMENTS" | jq -c '.comments | reverse | .[]' | while IFS= read -r comment; do
             echo
-            printf '%s' "$comment" | jq -r '"-- \(.author.displayName // "unknown"), \(.created // "")"'
+            printf '%s' "$comment" | jq -r '"-- \(.author.displayName // "unknown"), \(.created // ""), comment \(.id)"'
             printf '%s' "$comment" | jq -c '.body // {"type": "doc", "version": 1, "content": []}' \
                 | htmlplus_markdown || echo "  (this comment could not be rendered - see the error above)"
             echo
@@ -453,24 +515,7 @@ case "${1:-}" in
             esac
         done
         require_issue_key "$KEY"
-        if [ -n "$TEXT" ] && [ -n "$BODY_FILE" ]; then
-            echo "Error: pass the comment as text or with --body-file, not both." >&2
-            exit 1
-        fi
-        if [ -n "$BODY_FILE" ]; then
-            [ -f "$BODY_FILE" ] || { echo "Error: $BODY_FILE does not exist." >&2; exit 1; }
-            COMMENT_ADF=$(htmlplus_jira "$BODY_FILE")
-        elif [ -n "${TEXT//[[:space:]]/}" ]; then
-            COMMENT_ADF=$(text_to_adf "$TEXT")
-        else
-            echo "Error: the comment is empty." >&2
-            echo "Usage: jira-issues.sh comment <ISSUE-KEY> <text> | --body-file FILE [--dry-run]" >&2
-            exit 1
-        fi
-        if [ "$(printf '%s' "$COMMENT_ADF" | jq '.content | length')" = "0" ]; then
-            echo "Error: the comment is empty. Nothing was sent." >&2
-            exit 1
-        fi
+        COMMENT_ADF=$(comment_adf "$TEXT" "$BODY_FILE")
         PAYLOAD=$(jq -n --argjson b "$COMMENT_ADF" '{body: $b}')
         if [ "$DRY" = "1" ]; then
             printf '%s\n' "$PAYLOAD" | jq .
@@ -481,6 +526,70 @@ case "${1:-}" in
         api_ok || api_fail "$API_BODY" "commenting on $KEY"
         COMMENT_ID=$(printf '%s' "$API_BODY" | jq -r '.id // empty')
         echo "Commented on $KEY: $SITE/browse/$KEY${COMMENT_ID:+?focusedCommentId=$COMMENT_ID}"
+        ;;
+
+    comment-update)
+        shift
+        KEY="${1:-}"; COMMENT_ID="${2:-}"
+        [ $# -gt 0 ] && shift
+        [ $# -gt 0 ] && shift
+        TEXT=""; BODY_FILE=""; DRY=0
+        if [ $# -gt 0 ] && [ "${1#--}" = "$1" ]; then
+            TEXT="$1"; shift
+        fi
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --body-file) [ $# -ge 2 ] || { echo "Error: --body-file needs a file." >&2; exit 1; }
+                             BODY_FILE="$2"; shift 2 ;;
+                --dry-run)   DRY=1; shift ;;
+                *) echo "Error: unknown option '$1'." >&2
+                   echo "Usage: jira-issues.sh comment-update <ISSUE-KEY> <COMMENT-ID> <text> | --body-file FILE [--dry-run]" >&2
+                   exit 1 ;;
+            esac
+        done
+        require_issue_key "$KEY"
+        require_comment_id "$COMMENT_ID"
+        COMMENT_ADF=$(comment_adf "$TEXT" "$BODY_FILE")
+        fetch_own_comment "$KEY" "$COMMENT_ID" "update"
+        PAYLOAD=$(jq -n --argjson b "$COMMENT_ADF" '{body: $b}')
+        if [ "$DRY" = "1" ]; then
+            printf '%s\n' "$PAYLOAD" | jq .
+            echo "Dry run: comment $COMMENT_ID on $KEY would be replaced with this. Nothing was sent."
+            exit 0
+        fi
+        api PUT "/rest/api/3/issue/$KEY/comment/$COMMENT_ID" "$PAYLOAD"
+        api_ok || api_fail "$API_BODY" "updating comment $COMMENT_ID on $KEY"
+        echo "Updated comment $COMMENT_ID on $KEY: $SITE/browse/$KEY?focusedCommentId=$COMMENT_ID"
+        ;;
+
+    comment-delete)
+        shift
+        KEY="${1:-}"; COMMENT_ID="${2:-}"
+        [ $# -gt 0 ] && shift
+        [ $# -gt 0 ] && shift
+        DRY=0
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --dry-run) DRY=1; shift ;;
+                *) echo "Error: unknown option '$1'." >&2
+                   echo "Usage: jira-issues.sh comment-delete <ISSUE-KEY> <COMMENT-ID> [--dry-run]" >&2
+                   exit 1 ;;
+            esac
+        done
+        require_issue_key "$KEY"
+        require_comment_id "$COMMENT_ID"
+        fetch_own_comment "$KEY" "$COMMENT_ID" "delete"
+        printf '%s' "$COMMENT_JSON" | jq -r '"Comment \(.id) on '"$KEY"', \(.author.displayName // "unknown"), \(.created // ""):"'
+        printf '%s' "$COMMENT_JSON" | jq -c '.body // {"type": "doc", "version": 1, "content": []}' \
+            | htmlplus_markdown | sed 's/^/    /' || true
+        echo
+        if [ "$DRY" = "1" ]; then
+            echo "Dry run: this comment would be deleted permanently. Nothing was sent."
+            exit 0
+        fi
+        api DELETE "/rest/api/3/issue/$KEY/comment/$COMMENT_ID"
+        api_ok || api_fail "$API_BODY" "deleting comment $COMMENT_ID on $KEY"
+        echo "Deleted comment $COMMENT_ID on $KEY. Jira cannot restore it."
         ;;
 
     transitions)
