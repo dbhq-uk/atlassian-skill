@@ -17,6 +17,9 @@ every node the converter has no named form for that no longer appears.
 `same` says whether a page already holds what publish.sh would write, so an
 unchanged file does not add an empty version to the page history.
 
+`count-text` says how many times a piece of text appears on a page, which
+an inline comment has to state when it is created.
+
 Standard library only. Reads files, writes JSON to stdout, sends nothing.
 """
 
@@ -213,6 +216,34 @@ def _same(new, live):
     return new == live
 
 
+def count_text(doc, selection):
+    """How many times selection appears in the page's text, block by block.
+
+    An inline comment is anchored to text inside one block, and Confluence
+    wants the number of matches on the page with the one to highlight. A
+    run of text stops at any inline node that is not text (a mention, a
+    status, a date), so a selection across one of those counts as absent
+    and is refused, rather than guessed at.
+    """
+    if not selection:
+        return 0
+    total = 0
+    for node, _ in _walk(doc):
+        content = node.get("content") or []
+        if not any(isinstance(c, dict) and c.get("type") == "text" for c in content):
+            continue
+        runs, run = [], ""
+        for child in content:
+            if isinstance(child, dict) and child.get("type") == "text":
+                run += child.get("text", "")
+            else:
+                runs.append(run)
+                run = ""
+        runs.append(run)
+        total += sum(r.count(selection) for r in runs)
+    return total
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -227,6 +258,9 @@ def main(argv=None):
     m = sub.add_parser("same", help="exit 0 if the live ADF already holds the new one")
     m.add_argument("new")
     m.add_argument("live")
+    c = sub.add_parser("count-text", help="print how many times the text appears on the page")
+    c.add_argument("page", help="the live page ADF, as JSON")
+    c.add_argument("text")
     args = parser.parse_args(argv)
     try:
         if args.command == "splice":
@@ -245,6 +279,9 @@ def main(argv=None):
             with open(args.live, encoding="utf-8") as f:
                 live = json.load(f)
             return 0 if same(new, live) else 3
+        elif args.command == "count-text":
+            with open(args.page, encoding="utf-8") as f:
+                print(count_text(json.load(f), args.text))
         else:
             with open(args.before, encoding="utf-8") as f:
                 before = json.load(f)

@@ -26,7 +26,8 @@ It does three jobs:
   the first time. A move is checked against the transitions the issue's
   workflow offers before it is sent.
 - **Confluence**: searches, reads, creates and updates Confluence Cloud pages
-  over the v2 REST API - with a stale-write guard on every update.
+  over the v2 REST API - with a stale-write guard on every update - and
+  lists, adds, replies to, updates, resolves and deletes their comments.
 - **Publish**: turns a repository's markdown file into a Confluence page,
   idempotently, with the page id written back into the file's own frontmatter.
 
@@ -34,9 +35,7 @@ The skill's `SKILL.md` is short. It holds the setup and the rules, and sends
 the agent to the reference for the job in hand: `references/jira.md`,
 `references/confluence.md` or `references/publish.md`.
 
-**It creates, reads and updates only.** There is no delete anywhere, no bulk
-transition, and no project or space administration. Anything destructive stays
-a human job in the Atlassian UI.
+**It creates, reads and updates. The one delete is a comment your own account wrote**, on Jira or Confluence, and on Confluence only one with no replies. It never deletes an issue, a page, an attachment or a space. There is no bulk transition and no project or space administration. Anything else destructive stays a human job in the Atlassian UI.
 
 ## Install
 
@@ -141,7 +140,8 @@ mode 600, outside any repository.
 Setup takes a classic API token or a scoped one (Create API token with scopes),
 and works out which. A scoped token calls `api.atlassian.com` rather than your
 site, and with granular scopes and no `delete:` scope it cannot delete anything
-even if a script tried. [`SECURITY.md`](SECURITY.md#scope-of-the-token) lists
+even if a script tried. Add the two comment delete scopes only if you want the
+comment delete. [`SECURITY.md`](SECURITY.md#scope-of-the-token) lists
 the scopes. Every API token expires after at most a year; a 401 says so.
 
 The token never reaches a command line, including the multipart request the
@@ -275,6 +275,8 @@ cd ~/.claude/skills/atlassian/scripts
 ./jira-issues.sh bulk PAY tickets.json --dry-run
 ./jira-issues.sh get PAY-12 --comments 10
 ./jira-issues.sh comment PAY-12 "Deployed to staging."
+./jira-issues.sh comment-update PAY-12 10042 "Deployed to staging and production."
+./jira-issues.sh comment-delete PAY-12 10042 --dry-run   # only your own comment
 ./jira-issues.sh transitions PAY-12       # where it can move from here
 ./jira-issues.sh transition PAY-12 "In Progress" --dry-run
 ./jira-issues.sh search "assignee = currentUser() AND statusCategory != Done"
@@ -302,7 +304,7 @@ A batch pauses a second between creates. On a
 [Atlassian's rate-limiting guidance](https://developer.atlassian.com/cloud/jira/platform/rate-limiting/),
 and stops sending if the limit has not cleared. It reports `Created:` and
 `Failed:` counts at the end. A partial failure leaves the created issues in
-place, because there is no rollback: the skill cannot delete. Every entry that
+place, because there is no rollback: the skill cannot delete an issue. Every entry that
 was not created goes to a remaining file (`tickets.json` gives
 `tickets.remaining.json`), so a re-run of that file sends only those.
 
@@ -364,6 +366,20 @@ no header line ahead of it to reject as loose text.
 
 `update` always needs that `--base-version` - see [§ A known limit](#a-known-limit-the-round-trip-gate)
 for what it protects against and what it does not.
+
+#### Comments
+
+```bash
+./confluence-comments.sh list 1234567                     # every thread, with ids
+./confluence-comments.sh create 1234567 "Looks good."     # a footer comment
+./confluence-comments.sh create 1234567 "Which one?" --inline "egress address"
+./confluence-comments.sh reply 7654321 "Fixed in version 15."
+./confluence-comments.sh update 7654321 "Corrected." --base-version 1
+./confluence-comments.sh resolve 7654321                  # inline comments only
+./confluence-comments.sh delete 7654321 --dry-run         # your own, with no replies
+```
+
+`--inline` anchors a comment to text on the page. The script counts that text on the live page, and asks for `--match <n>` when it appears more than once. `update` needs `--base-version`, as a page update does. `update` and `delete` act only on a comment your own account wrote, and `delete` refuses a comment with replies, because Confluence's delete is permanent and would take the replies with it.
 
 ### Publishing markdown
 

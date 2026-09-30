@@ -45,7 +45,7 @@ list and what each check is for.
 ## What we will not accept
 
 **A delete, a bulk transition, or project or space administration.** The
-skill creates, reads and updates - never deletes. That boundary is the reason
+skill creates, reads and updates. Its one delete is a comment the account wrote itself, and it will not grow a second. That boundary is the reason
 it is safe to let an agent drive them, and `jira bulk` has no rollback
 precisely because it cannot delete what it made. A pull request that adds a
 destructive call, or a `--force` on `confluence-pages.sh update`'s

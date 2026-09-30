@@ -367,6 +367,79 @@ class TestComment(_Harness):
         self.assertEqual(self.requests(), [])
 
 
+class TestCommentUpdateAndDelete(_Harness):
+    """Only a comment the account wrote itself is updated or deleted."""
+
+    def given(self, author="acc-me"):
+        existing = comment(4)
+        existing["id"] = "10042"
+        existing["author"]["accountId"] = author
+        self.routes([
+            {"match": "/rest/api/3/myself", "body": json.dumps({"accountId": "acc-me"})},
+            {"match": "/rest/api/3/issue/PAY-12/comment/10042", "body": json.dumps(existing)},
+            {"method": "PUT", "match": "/rest/api/3/issue/PAY-12/comment/10042",
+             "body": json.dumps({"id": "10042"})},
+            {"method": "DELETE", "match": "/rest/api/3/issue/PAY-12/comment/10042", "status": 204,
+             "body": ""},
+        ])
+
+    def test_update_replaces_the_body_of_your_own_comment(self):
+        self.given()
+        result = self.run_issues("comment-update", "PAY-12", "10042", "Corrected.")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        puts = self.requests("PUT")
+        self.assertEqual(len(puts), 1)
+        self.assertEqual(json.loads(puts[0]["body"])["body"]["content"][0]["content"][0]["text"],
+                         "Corrected.")
+        self.assertIn("focusedCommentId=10042", result.stdout)
+
+    def test_delete_removes_your_own_comment(self):
+        self.given()
+        result = self.run_issues("comment-delete", "PAY-12", "10042")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.requests("DELETE")), 1)
+        self.assertIn("Comment number 4", result.stdout)
+
+    def test_someone_elses_comment_is_refused_before_a_write(self):
+        for args in (("comment-update", "PAY-12", "10042", "Mine now."),
+                     ("comment-delete", "PAY-12", "10042")):
+            with self.subTest(args=args):
+                self.given(author="acc-other")
+                result = self.run_issues(*args)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("written by someone else", result.stderr)
+                self.assertEqual({r["method"] for r in self.requests()}, {"GET"})
+
+    def test_dry_run_reads_but_sends_nothing(self):
+        for args in (("comment-update", "PAY-12", "10042", "x", "--dry-run"),
+                     ("comment-delete", "PAY-12", "10042", "--dry-run")):
+            with self.subTest(args=args):
+                self.given()
+                result = self.run_issues(*args)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("Nothing was sent.", result.stdout)
+                self.assertEqual({r["method"] for r in self.requests()}, {"GET"})
+
+    def test_a_bad_key_or_comment_id_is_refused_before_a_request(self):
+        for args in (("comment-delete", "PAY-12", "10042/../x"),
+                     ("comment-delete", "pay", "10042"),
+                     ("comment-update", "PAY-12", "", "x"),
+                     ("comment-update", "PAY-12", "10042")):
+            with self.subTest(args=args):
+                result = self.run_issues(*args)
+                self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.requests(), [])
+
+    def test_get_prints_each_comment_id(self):
+        self.routes([
+            {"match": "/rest/api/3/issue/PAY-12/comment",
+             "body": json.dumps({"total": 1, "comments": [comment(3)]})},
+            {"match": "/rest/api/3/issue/PAY-12", "body": json.dumps(ISSUE)},
+        ])
+        result = self.run_issues("get", "PAY-12")
+        self.assertIn("comment 3", result.stdout)
+
+
 TRANSITIONS = {"transitions": [
     {"id": "21", "name": "Start work", "to": {"name": "In Progress"}, "fields": {}},
     {"id": "31", "name": "Done", "to": {"name": "Done"}, "fields": {}},

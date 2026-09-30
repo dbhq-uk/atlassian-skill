@@ -166,14 +166,35 @@ class TestReferencesExist(unittest.TestCase):
 
 
 class TestNoDestructiveVerb(unittest.TestCase):
-    """Create and read. The absence of a delete is the safety property."""
+    """The one delete is a comment the account wrote itself. Nothing else -
+    not an issue, a page, an attachment or a space - is ever deleted."""
 
-    def test_no_script_issues_a_delete(self):
+    # (script, the exact delete line, the own-comment check it must follow)
+    ALLOWED = {
+        ("jira-issues.sh",
+         'api DELETE "/rest/api/3/issue/$KEY/comment/$COMMENT_ID"',
+         'fetch_own_comment "$KEY" "$COMMENT_ID" "delete"'),
+        ("confluence-comments.sh",
+         'api DELETE "/wiki/api/v2/$COMMENT_KIND/$COMMENT_ID"',
+         'require_own "delete"'),
+    }
+
+    def test_the_only_deletes_are_own_comments(self):
+        found = set()
         for path in REPO.rglob("skills/**/*.sh"):
             text = path.read_text(encoding="utf-8")
             self.assertNotIn('request = "DELETE"', text, str(path))
             self.assertNotIn("-X DELETE", text, str(path))
-            self.assertNotIn("api DELETE", text, str(path))
+            for line in text.splitlines():
+                if "api DELETE" in line:
+                    found.add((path.name, line.strip()))
+        self.assertEqual(found, {(name, line) for name, line, _ in self.ALLOWED})
+
+    def test_each_delete_follows_its_own_comment_check(self):
+        for name, line, check in self.ALLOWED:
+            text = (REPO / "skills" / "atlassian" / "scripts" / name).read_text(encoding="utf-8")
+            self.assertIn(check, text, name)
+            self.assertLess(text.index(check), text.index(line), name)
 
 
 class TestNoForceFlag(unittest.TestCase):
@@ -641,6 +662,7 @@ class TestHouseStyleIsOnTheWritePath(unittest.TestCase):
         SKILL / "SKILL.md",
         SKILL / "references" / "jira.md",
         SKILL / "references" / "confluence.md",
+        SKILL / "references" / "confluence-comments.md",
         SKILL / "references" / "publish.md",
     )
 

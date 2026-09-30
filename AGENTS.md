@@ -7,7 +7,7 @@ Guidance for AI agents (and people) working in this repository.
 **atlassian** - one agent skill that talks to an Atlassian Cloud site over
 its REST API, on one credential and with no MCP server. It creates, reads and
 comments on Jira issues and moves one issue at a time through its workflow,
-searches, reads, creates and updates Confluence pages, and
+searches, reads, creates and updates Confluence pages and their comments, and
 publishes a repository's markdown file to a page. It follows the
 [Agent Skills](https://agentskills.io) layout (`skills/<name>/SKILL.md`) and
 ships as a [Claude Code plugin](https://code.claude.com/docs/en/plugins).
@@ -36,20 +36,20 @@ copy of that folder alone.
 
 `SKILL.md` is always loaded, so it stays short: setup, the rules and when not
 to use the skill. The commands live in `references/jira.md`,
-`references/confluence.md` and `references/publish.md`, which the agent reads
+`references/confluence.md`, `references/confluence-comments.md` and `references/publish.md`, which the agent reads
 for the task in hand.
 
 ## The constraints that must not be broken
 
 Everything else here is a preference. These are not.
 
-**1. It creates, reads and updates. It does not delete.** No delete anywhere -
+**1. It creates, reads and updates. The one delete is a comment the account wrote itself.** Added on 30 September 2026, on request: `jira-issues.sh comment-delete` and `confluence-comments.sh delete`. Each reads the comment and refuses unless its author is the account the token authenticates as, and the Confluence one also refuses a comment with replies, since the replies would go with it. Nothing else is deleted -
 not a page, not an issue, not an attachment, not a space. No bulk transition,
 no project or space administration. `jira bulk` keeps `--dry-run`. A partial
 failure leaves the successful work in place, and that is stated rather than
 hidden, because the skill has no way to roll back. Anything destructive
 stays a human job in the Atlassian UI. `test_constraints.py`'s
-`TestNoDestructiveVerb` asserts no script issues a `DELETE`.
+`TestNoDestructiveVerb` asserts that those two are the only `DELETE` calls, and that each comes after its own-comment check.
 
 **2. The token never reaches a command line.** `curl` reads the URL, the
 credentials and the method from a 0600 config file, so the token stays out of
