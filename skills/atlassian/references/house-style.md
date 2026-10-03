@@ -178,9 +178,8 @@ them:
 - **Editorialising adjectives on evidence.** "Real work", "the good news is".
 - **Em dashes.** Use a comma, colon, semicolon or parentheses.
 
-Then reread and delete every sentence that does one of the above. Expect to
-lose roughly a fifth. If deleting a sentence costs no information, it was one
-of these.
+Then reread and delete every sentence that does one of the above. If deleting
+a sentence costs no information, it was one of these.
 
 ---
 

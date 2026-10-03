@@ -1,6 +1,6 @@
 ---
 name: atlassian
-description: Jira Cloud and Confluence Cloud over the REST API, with an API token and no MCP server. Creates, reads and comments on Jira issues and moves one through its workflow, searches, reads, creates and updates Confluence pages, and publishes a repository's markdown file to a Confluence page. Never deletes. Trigger on phrases like "jira", "raise a jira ticket", "create a jira ticket", "what's assigned to me in jira", "comment on the jira ticket", "move the jira ticket to done", "search jira", "JQL", "confluence", "the wiki", "what does the wiki say", "create a confluence page", "update that confluence page", "CQL", "publish this to confluence", "push the docs to the wiki", "sync these docs to confluence".
+description: Jira Cloud and Confluence Cloud over the REST API, with an API token and no MCP server. Creates, reads and comments on Jira issues and moves one through its workflow, searches, reads, creates and updates Confluence pages, and publishes a repository's markdown file to a Confluence page. Never deletes. Use whenever the user mentions Jira, Confluence or "the wiki", writes JQL or CQL, wants a ticket raised, read, searched, commented on or moved, wants a wiki page found, written or updated, or wants repository docs published or synced to Confluence.
 ---
 
 # atlassian
