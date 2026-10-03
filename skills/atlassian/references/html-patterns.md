@@ -84,7 +84,7 @@ All four elements above also carry a `data-local-id` on a page fetched back
 from Confluence - on the `<ul>` for a task list authored directly through this
 skill (Confluence leaves it empty), and always on each `<li>` item, task or
 decision, which Confluence assigns a real id to the moment it is saved, even
-when none was sent. Like the media `data-local-id` above, this is round-trip
+when none was sent. Like the media `data-local-id` below, this is round-trip
 bookkeeping, not something to invent when hand-authoring a new list - leave it
 off, exactly as the examples above do, and Confluence assigns its own.
 
@@ -125,7 +125,7 @@ holds less: no table, no card and no further expand, so a third level is
 refused. It cannot be made wide either.
 
 `<details>` also takes `data-local-id` and, on a fetched page,
-`data-breakout-mode` (see Code blocks above) for an expand stretched wide.
+`data-breakout-mode` (see Code blocks below) for an expand stretched wide.
 
 Use one for anything a reader needs available but not in their way: a change
 log, a long field map, a superseded position kept for the record.
@@ -296,7 +296,7 @@ Available: `layout-two-equal`, `layout-two-left-sidebar`,
 A column takes `data-width` (a percentage, no `%` sign: `66.66`) for a divider
 dragged off the even split its name suggests - omit it when hand-authoring a
 fresh layout and this converter computes an even split itself. On a fetched
-page, `<section>` can also carry `data-breakout-mode` (see Code blocks above)
+page, `<section>` can also carry `data-breakout-mode` (see Code blocks below)
 for a layout section stretched wide.
 
 ---

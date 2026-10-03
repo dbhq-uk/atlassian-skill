@@ -61,6 +61,10 @@ for src in "$SCRIPT_DIR"/skills/*/; do
   src="${src%/}"
   name="$(basename "$src")"
   target="$SKILLS_ROOT/$name"
+  # A folder with no SKILL.md is not a skill: the pre-merge confluence-publish
+  # and _shared folders survive on disk as git-ignored caches, and linking them
+  # would undo the removal above. install-codex.sh skips them the same way.
+  [ -f "$src/SKILL.md" ] || continue
   echo "Installing '$name' -> $target"
   # Only ever remove a symlink here, never a real directory - a target that
   # exists and is NOT a symlink is left alone with an error rather than

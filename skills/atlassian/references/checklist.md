@@ -59,8 +59,6 @@ and catches the things a reader notices first.
       narration, doubled hedges, justified requests, scaffolding preambles,
       self-praising qualifiers, invented framing for someone else's work,
       reassurance, and editorialising adjectives on evidence.
-- [ ] Roughly a fifth of the first draft is gone. If nothing was cut, the pass
-      did not happen.
 
 ## Title and placement
 
