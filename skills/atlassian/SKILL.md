@@ -53,7 +53,8 @@ The scripts need `jq`, `curl`, `column` and Python 3 (standard library only).
 4. **A Confluence `update` or `edit` needs `--base-version`** - the version your edit started from. It refuses if the page has moved on. To change part of a page, use `edit`, which leaves the rest untouched.
 5. **Bodies are HTML+**, converted to ADF and checked locally before anything is sent. Never markdown on the wire, never storage format.
 6. **There is no `--force`.** A refusal needs a human decision, not a flag.
-7. Never put a credential, a token or personal data into an issue or a page.
+7. **Read an issue back after you create it.** A Jira automation rule can replace the description you sent, a second after create, and the create still reports success. Wait about ten seconds, `get` it, and check the description is yours. See [references/jira.md](references/jira.md#check-the-description-survived).
+8. Never put a credential, a token or personal data into an issue or a page.
 
 When a script fails, read the `Cause:` and `Fix:` lines it prints.
 

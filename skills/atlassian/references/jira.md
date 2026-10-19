@@ -52,6 +52,18 @@ An entry can carry a `fields` object for anything else, the same as `create`'s `
 
 Every successful create prints the issue key and its browse URL.
 
+### Check the description survived
+
+**A project's automation can overwrite what you sent.** Seen on 2026-10-16 in a Compre Jira project: two Stories were created with a full description, and about a second later an "Automation for Jira" rule replaced each one with the project's empty Story template. The create had printed the key and the URL, so nothing looked wrong. The person who asked for the tickets found them blank three days later. A third Story in the same project, created the same morning, kept its text, so the rule does not fire every time.
+
+So after every create, and after every issue in a `bulk`:
+
+1. Wait about ten seconds, then `get` the issue.
+2. Check the description is the one you sent.
+3. If it is not, tell the user what replaced it and who changed it (the issue's changelog names the author). Do not quietly write it back: the template may be the project's rule, and whether to keep it is the user's call.
+
+The skill has no command to edit a description. Writing one back is a `PUT /rest/api/3/issue/<KEY>` with the `description` field, after the user agrees. An edit does not trigger a create rule, so it stays.
+
 ## Formatted descriptions
 
 `--description-file` takes an HTML+ fragment in place of the plain-text `[description]`, so a description can carry a real panel, a syntax-highlighted code block, a table and a status lozenge instead of a wall of text:
