@@ -1,6 +1,6 @@
 ---
 name: atlassian
-description: Jira Cloud and Confluence Cloud over the REST API, with an API token and no MCP server. Creates, reads and comments on Jira issues and moves one through its workflow, searches, reads, creates and updates Confluence pages, and publishes a repository's markdown file to a Confluence page. Never deletes. Use whenever the user mentions Jira, Confluence or "the wiki", writes JQL or CQL, wants a ticket raised, read, searched, commented on or moved, wants a wiki page found, written or updated, or wants repository docs published or synced to Confluence.
+description: Jira Cloud and Confluence Cloud over the REST API, with an API token and no MCP server. Creates, reads, edits and comments on Jira issues and moves one through its workflow, searches, reads, creates and updates Confluence pages, and publishes a repository's markdown file to a Confluence page. Never deletes. Use whenever the user mentions Jira, Confluence or "the wiki", writes JQL or CQL, wants a ticket raised, read, searched, edited, commented on or moved, wants a wiki page found, written or updated, or wants repository docs published or synced to Confluence.
 ---
 
 # atlassian
@@ -15,7 +15,7 @@ Read the matching file before you run anything. Each one holds the commands, the
 
 | Task | Read |
 |---|---|
-| Create, read, search or comment on Jira issues, or move one to another status | `${CLAUDE_SKILL_DIR}/references/jira.md` |
+| Create, read, search, edit or comment on Jira issues, or move one to another status | `${CLAUDE_SKILL_DIR}/references/jira.md` |
 | Search, read, create, edit or update a Confluence page | `${CLAUDE_SKILL_DIR}/references/confluence.md` |
 | Publish a markdown file to a Confluence page | `${CLAUDE_SKILL_DIR}/references/publish.md` |
 

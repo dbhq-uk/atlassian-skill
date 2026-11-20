@@ -19,7 +19,7 @@ A free, open-source tool by [DBHQ](https://dbhq.uk) - documented at [skills.dbhq
 One agent skill for Atlassian Cloud, on one credential and with no MCP server.
 It does three jobs:
 
-- **Jira**: creates, reads and comments on Jira Cloud issues over the REST API
+- **Jira**: creates, reads, edits and comments on Jira Cloud issues over the REST API
   v3, and moves one issue at a time through its workflow. Ask your agent to
   raise a ticket and it does, after checking the project key, the issue type
   and the required fields against your Jira first, so the create call is right
