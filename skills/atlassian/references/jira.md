@@ -1,6 +1,6 @@
 # Jira issue creation and lookup
 
-Create, read and comment on Jira Cloud issues, and move one issue through its workflow, through the REST v3 API. Credentials, setup and the rules are in `SKILL.md`.
+Create, read, edit and comment on Jira Cloud issues, and move one issue through its workflow, through the REST v3 API. Credentials, setup and the rules are in `SKILL.md`.
 
 ## Look before you create
 
@@ -104,6 +104,21 @@ ${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh mine [max]
 `search` posts to `/rest/api/3/search/jql`. The old `GET /rest/api/3/search` is deprecated and is not used here.
 
 `search` fetches one page only, up to `max` (default 25). It is not silent about that: if the response carries a `nextPageToken`, or the page is exactly full, it says more results may exist and to raise `max` or narrow the JQL, rather than let a truncated result set look complete.
+
+## Editing an issue
+
+```bash
+${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh edit <ISSUE-KEY> --summary "<summary>" [--dry-run]
+${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh edit <ISSUE-KEY> --description-file /tmp/desc.html [--dry-run]
+${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh edit <ISSUE-KEY> --description "<text>" --field customfield_10050=Ops
+${CLAUDE_SKILL_DIR}/scripts/jira-issues.sh edit <ISSUE-KEY> --restore /tmp/jira-edit-<ISSUE-KEY>.abc123
+```
+
+`edit` sends only the fields you name, with `PUT /rest/api/3/issue/<KEY>`. Every other field stays as it is. `--description` (plain text) and `--description-file` (an HTML+ fragment, held to Jira's node list as for `create`) replace the whole description, so read the issue with `get` first and write the full new text. `--field KEY=VALUE` works as it does for `create`, but cannot set `summary` or `description` (use their own option), or `project` or `issuetype` (change those in the Jira UI).
+
+Before it sends, `edit` reads the current value of every field it changes and saves it to a file in `$TMPDIR` (or `/tmp`). It prints the path and the `--restore` command that puts those values back. `--restore` refuses a file saved from another issue, and takes no other field option. `--dry-run` prints the payload and sends nothing, and reads nothing either.
+
+Confirm the new text with the user before a live edit, as for a comment.
 
 ## Commenting
 

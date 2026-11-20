@@ -367,6 +367,94 @@ class TestComment(_Harness):
         self.assertEqual(self.requests(), [])
 
 
+class TestEdit(_Harness):
+    def setUp(self):
+        super().setUp()
+        self.env["TMPDIR"] = str(self.tmp)
+        self.routes([
+            {"method": "GET", "match": "/rest/api/3/issue/PAY-12?fields=",
+             "body": json.dumps({"key": "PAY-12", "fields": {
+                 "summary": "Open the port", "description": DESCRIPTION}})},
+            {"method": "PUT", "match": "/rest/api/3/issue/PAY-12", "status": 204, "body": ""},
+        ])
+
+    def put(self):
+        puts = self.requests("PUT")
+        self.assertEqual(len(puts), 1, puts)
+        return json.loads(puts[0]["body"])
+
+    def test_only_the_named_fields_are_sent(self):
+        result = self.run_issues("edit", "PAY-12", "--summary", "Open port 1433")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.put(), {"fields": {"summary": "Open port 1433"}})
+
+    def test_a_description_file_goes_through_the_jira_profile(self):
+        good = self.tmp / "d.html"
+        good.write_text('<div data-type="panel-info"><p>Replaced.</p></div>')
+        result = self.run_issues("edit", "PAY-12", "--description-file", str(good))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.put()["fields"]["description"]["content"][0]["type"], "panel")
+        self.log.unlink()
+        bad = self.tmp / "bad.html"
+        bad.write_text('<ul data-type="decision-list"><li data-type="decision-item" '
+                       'data-state="DECIDED">Ship it</li></ul>')
+        result = self.run_issues("edit", "PAY-12", "--description-file", str(bad))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("decisionList", result.stderr)
+        self.assertEqual(self.requests(), [])
+
+    def test_the_old_values_are_saved_and_can_be_put_back(self):
+        result = self.run_issues("edit", "PAY-12", "--summary", "New", "--description", "New text.")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        backup = re.search(r"--restore (\S+)", result.stdout).group(1)
+        saved = json.loads(pathlib.Path(backup).read_text())
+        self.assertEqual(saved, {"key": "PAY-12", "fields": {
+            "summary": "Open the port", "description": DESCRIPTION}})
+        gets = self.requests("GET")
+        self.assertTrue(gets and "fields=summary,description" in gets[0]["url"], gets)
+        self.log.unlink()
+        result = self.run_issues("edit", "PAY-12", "--restore", backup)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.put(), {"fields": saved["fields"]})
+
+    def test_a_backup_from_another_issue_is_refused(self):
+        other = self.tmp / "other.json"
+        other.write_text(json.dumps({"key": "PAY-13", "fields": {"summary": "x"}}))
+        result = self.run_issues("edit", "PAY-12", "--restore", str(other))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("PAY-13", result.stderr)
+        self.assertEqual(self.requests(), [])
+
+    def test_a_field_option_reaches_the_payload_as_json(self):
+        result = self.run_issues("edit", "PAY-12", "--field", 'priority={"name":"High"}',
+                                 "--field", "customfield_10050=Ops")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.put()["fields"], {"priority": {"name": "High"},
+                                                "customfield_10050": "Ops"})
+
+    def test_dry_run_reads_and_sends_nothing(self):
+        result = self.run_issues("edit", "PAY-12", "--summary", "New", "--dry-run")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Nothing was sent.", result.stdout)
+        self.assertEqual(self.requests(), [])
+
+    def test_bad_input_is_refused_before_a_request(self):
+        desc = self.tmp / "d.html"
+        desc.write_text("<p>x</p>")
+        for args in (("edit", "PAY-12"),
+                     ("edit", "PAY-12", "--summary", "  "),
+                     ("edit", "PAY-12", "--description", "a", "--description-file", str(desc)),
+                     ("edit", "PAY-12", "--field", "summary=x"),
+                     ("edit", "PAY-12", "--field", "project=OPS"),
+                     ("edit", "PAY-12", "--restore", str(desc), "--summary", "x"),
+                     ("edit", "PAY-12/../x", "--summary", "x"),
+                     ("edit", "PAY-12", "--summary")):
+            with self.subTest(args=args):
+                result = self.run_issues(*args)
+                self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.requests(), [])
+
+
 TRANSITIONS = {"transitions": [
     {"id": "21", "name": "Start work", "to": {"name": "In Progress"}, "fields": {}},
     {"id": "31", "name": "Done", "to": {"name": "Done"}, "fields": {}},

@@ -1,6 +1,6 @@
 #!/bin/bash
-# Jira issues - create, read, comment on, and move one issue through its
-# workflow. There is deliberately no delete and no bulk transition here: this
+# Jira issues - create, read, edit, comment on, and move one issue through
+# its workflow. There is deliberately no delete and no bulk transition here: this
 # skill cannot destroy work, and a transition moves one issue at a time.
 
 set -e
@@ -11,7 +11,7 @@ require_config
 
 usage() {
     cat <<'EOF'
-Jira issues (create, read, comment and transition - never delete)
+Jira issues (create, read, edit, comment and transition - never delete)
 
 Usage: jira-issues.sh <command> [args]
 
@@ -34,6 +34,17 @@ Read:
   search <JQL> [max]         Search with JQL (default 25 results)
   mine [max]                 Open issues assigned to you
   transitions <ISSUE-KEY>    The moves the issue's workflow allows from here
+
+Edit:
+  edit <ISSUE-KEY> [--summary S] [--description TEXT | --description-file FILE] [--field KEY=VALUE]... [--dry-run]
+                             Change fields of one issue. Only the fields
+                             named are sent; the rest are left as they are.
+                             --description and --description-file replace
+                             the whole description. Before it sends, the
+                             current value of every field it changes is
+                             saved to a file, and the path is printed.
+  edit <ISSUE-KEY> --restore FILE [--dry-run]
+                             Put back the fields saved by an earlier edit.
 
 Comment and move:
   comment <ISSUE-KEY> <text> [--dry-run]
@@ -433,6 +444,117 @@ case "${1:-}" in
                 | htmlplus_markdown || echo "  (this comment could not be rendered - see the error above)"
             echo
         done
+        ;;
+
+    edit)
+        shift
+        KEY="${1:-}"; [ $# -gt 0 ] && shift
+        SUMMARY=""; SUMMARY_SET=0; DESCRIPTION=""; DESCRIPTION_FILE=""; RESTORE=""; DRY=0
+        EXTRA_FIELDS="{}"
+        EDIT_USAGE="Usage: jira-issues.sh edit <ISSUE-KEY> [--summary S] [--description TEXT | --description-file FILE] [--field KEY=VALUE]... [--dry-run]"
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --summary|--description|--description-file|--field|--restore)
+                    [ $# -ge 2 ] || { echo "Error: $1 needs a value." >&2; exit 1; } ;;
+            esac
+            case "$1" in
+                --summary)           SUMMARY="$2"; SUMMARY_SET=1; shift 2 ;;
+                --description)       DESCRIPTION="$2"; shift 2 ;;
+                --description-file)  DESCRIPTION_FILE="$2"; shift 2 ;;
+                --restore)           RESTORE="$2"; shift 2 ;;
+                --field)
+                    FIELD_KV="$2"
+                    FIELD_KEY="${FIELD_KV%%=*}"
+                    if [ "$FIELD_KEY" = "$FIELD_KV" ] || [ -z "$FIELD_KEY" ]; then
+                        echo "Error: --field needs key=value (got '$FIELD_KV')." >&2
+                        exit 1
+                    fi
+                    case "$FIELD_KEY" in
+                        summary|description)
+                            echo "Error: --field cannot set '$FIELD_KEY' - use --$FIELD_KEY instead." >&2
+                            exit 1 ;;
+                        project|issuetype)
+                            echo "Error: edit does not change '$FIELD_KEY'. Moving an issue to another project or type is done in the Jira UI." >&2
+                            exit 1 ;;
+                    esac
+                    # The same rule as create: a value that parses as JSON is
+                    # sent as JSON, anything else as a plain string.
+                    EXTRA_FIELDS=$(printf '%s' "$EXTRA_FIELDS" | jq --arg k "$FIELD_KEY" --arg v "${FIELD_KV#*=}" \
+                        '. + {($k): ($v | try fromjson catch $v)}')
+                    shift 2
+                    ;;
+                --dry-run)           DRY=1; shift ;;
+                *) echo "Error: unknown option '$1'." >&2; echo "$EDIT_USAGE" >&2; exit 1 ;;
+            esac
+        done
+        require_issue_key "$KEY"
+
+        if [ -n "$RESTORE" ]; then
+            if [ "$SUMMARY_SET" = "1" ] || [ -n "$DESCRIPTION" ] || [ -n "$DESCRIPTION_FILE" ] || [ "$EXTRA_FIELDS" != "{}" ]; then
+                echo "Error: --restore puts back a saved set of fields and takes no other field option." >&2
+                exit 1
+            fi
+            [ -f "$RESTORE" ] || { echo "Error: $RESTORE does not exist." >&2; exit 1; }
+            SAVED_KEY=$(jq -r '.key // empty' "$RESTORE" 2>/dev/null) || SAVED_KEY=""
+            if [ "$SAVED_KEY" != "$KEY" ]; then
+                echo "Error: $RESTORE holds fields saved from '${SAVED_KEY:-no issue}', not $KEY. Nothing was sent." >&2
+                exit 1
+            fi
+            FIELDS=$(jq -c '.fields // {}' "$RESTORE")
+        else
+            if [ -n "$DESCRIPTION" ] && [ -n "$DESCRIPTION_FILE" ]; then
+                echo "Error: --description and --description-file are mutually exclusive." >&2
+                exit 1
+            fi
+            if [ "$SUMMARY_SET" = "1" ] && [ -z "${SUMMARY//[[:space:]]/}" ]; then
+                echo "Error: the summary cannot be empty." >&2
+                exit 1
+            fi
+            FIELDS="{}"
+            [ "$SUMMARY_SET" = "1" ] && FIELDS=$(jq -n --arg s "$SUMMARY" '{summary: $s}')
+            DESC_ADF=""
+            if [ -n "$DESCRIPTION_FILE" ]; then
+                [ -f "$DESCRIPTION_FILE" ] || { echo "Error: $DESCRIPTION_FILE does not exist." >&2; exit 1; }
+                DESC_ADF=$(htmlplus_jira "$DESCRIPTION_FILE")
+            elif [ -n "${DESCRIPTION//[[:space:]]/}" ]; then
+                DESC_ADF=$(text_to_adf "$DESCRIPTION")
+            fi
+            if [ -n "$DESC_ADF" ]; then
+                if [ "$(printf '%s' "$DESC_ADF" | jq '.content | length')" = "0" ]; then
+                    echo "Error: the new description is empty. Nothing was sent." >&2
+                    exit 1
+                fi
+                FIELDS=$(printf '%s' "$FIELDS" | jq --argjson d "$DESC_ADF" '. + {description: $d}')
+            fi
+            FIELDS=$(printf '%s' "$FIELDS" | jq -c --argjson x "$EXTRA_FIELDS" '. + $x')
+        fi
+        if [ "$(printf '%s' "$FIELDS" | jq 'length')" = "0" ]; then
+            echo "Error: nothing to change." >&2
+            echo "$EDIT_USAGE" >&2
+            exit 1
+        fi
+        PAYLOAD=$(jq -n --argjson f "$FIELDS" '{fields: $f}')
+        CHANGED=$(printf '%s' "$FIELDS" | jq -r 'keys_unsorted | join(",")')
+        if [ "$DRY" = "1" ]; then
+            printf '%s\n' "$PAYLOAD" | jq .
+            echo "Dry run: these fields of $KEY would change: ${CHANGED//,/, }. Nothing was sent."
+            exit 0
+        fi
+
+        # Save what is there now, so an edit can be put back. An edit
+        # replaces a field outright, and Jira's history does not keep a
+        # rich description in a form that can be sent again.
+        api GET "/rest/api/3/issue/$KEY?fields=$CHANGED"
+        api_ok || api_fail "$API_BODY" "reading $KEY before the edit"
+        BACKUP=$(mktemp "${TMPDIR:-/tmp}/jira-edit-$KEY.XXXXXX")
+        printf '%s' "$API_BODY" | jq --arg key "$KEY" --argjson want "$(printf '%s' "$FIELDS" | jq 'keys')" \
+            '{key: $key, fields: (.fields as $f | reduce $want[] as $k ({}; . + {($k): ($f[$k] // null)}))}' > "$BACKUP"
+
+        api PUT "/rest/api/3/issue/$KEY" "$PAYLOAD"
+        api_ok || api_fail "$API_BODY" "editing $KEY"
+        echo "Edited $KEY (${CHANGED//,/, }): $SITE/browse/$KEY"
+        echo "The previous values are in $BACKUP"
+        echo "To put them back: jira-issues.sh edit $KEY --restore $BACKUP"
         ;;
 
     comment)
